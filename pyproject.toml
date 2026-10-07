@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pkgtool"
+version = "2.0.0"
+description = "Debian 系本地软件包盘点与管理工具（零第三方依赖）"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+pkgtool = "pkgtool.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["pkgtool*"]

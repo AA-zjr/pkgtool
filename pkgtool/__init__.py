@@ -1,17 +1,24 @@
-"""pkgtool — 跨包格式的软件盘点框架。
+"""pkgtool — Debian 系本地软件包盘点与管理工具（零第三方依赖）。
 
-BACKENDS 即注册表：新增格式 = 新建 <fmt>_backend.py + 在这里加一行。
+分层（依赖自上而下，禁止反向引用）：
+  config / compress / base / labels   内核：路径与阈值、压缩读取、数据模型、展示文案
+  apt/                                deb 数据源与写操作：索引、日志、dpkg 状态、特权执行
+  backends/                           各包格式采集器（deb/snap/flatpak/appimage/pip）
+  classify / remove                   卸载安全层：分类判定、残留扫描、dry-run 与执行
+  inventory                           编排：discover → collect → classify，唯一数据入口
+  report / cli                        输出与命令行
+
+典型用法：
+  from pkgtool import inventory
+  inv = inventory.collect()
+  for rec in inventory.select(inv, only_local=True):
+      print(rec.name, rec.version)
 """
-from .base import Backend, PackageRecord, CSV_HEADER
-from .deb_backend import DebBackend
-from .snap_backend import SnapBackend
-from .flatpak_backend import FlatpakBackend
-from .appimage_backend import AppImageBackend
-from .pip_backend import PipBackend
+from .base import (CSV_HEADER, Backend, Channel, OriginKind, PackageRecord,
+                   PkgClass, is_safe_name)
+from .backends import BACKENDS, available_backends, discover
+from .config import CFG, Config
 
-BACKENDS = [DebBackend, SnapBackend, FlatpakBackend, AppImageBackend, PipBackend]
-
-
-def discover():
-    """返回本机可用的后端实例列表。"""
-    return [b() for b in BACKENDS if b.available()]
+__all__ = ["CSV_HEADER", "Backend", "Channel", "OriginKind", "PackageRecord",
+           "PkgClass", "is_safe_name", "BACKENDS", "available_backends",
+           "discover", "CFG", "Config"]
