@@ -142,16 +142,25 @@ def _cached_debs(name, cfg):
     return paths
 
 
-def _apt_dry_run(name, cfg):
+def _apt_dry_run(name, autoremove, cfg):
     """apt-get remove -s → (会被一并移除的包名列表, 错误信息)。
-    用 remove -s 而不是 purge -s：后者只输出本地化文本，Remv 行不稳定；
+
+    标志必须与真正执行的命令一致：execute 跑的是 purge --autoremove，
+    dry-run 就必须也带 --autoremove。少了它，存在反向依赖的包会严重低报——
+    实测 node-css-loader 不带 autoremove 只报 1 个包，带上后是 397 个
+    （npm 依赖它，npm 整棵自动安装树随之孤立），用户会在错误的计划上确认。
+
+    用 remove -s 而不是 purge -s：purge 的模拟输出是本地化文本，Remv 行不稳定；
     两者算出的移除集合一致，真正执行时才用 purge。"""
+    argv = ["apt-get", "remove", "-s"]
+    if autoremove:
+        argv.append("--autoremove")
     try:
-        p = subprocess.run(["apt-get", "remove", "-s", name],
-                           capture_output=True, text=True, timeout=cfg.timeout_dry_run)
+        p = subprocess.run(argv + [name], capture_output=True, text=True,
+                           timeout=cfg.timeout_dry_run)
     except (OSError, subprocess.SubprocessError) as e:
         return [], f"{type(e).__name__}: {e}"
-    will = [ln.split()[1] for ln in p.stdout.splitlines()
+    will = [ln.split()[1].split(":")[0] for ln in p.stdout.splitlines()
             if ln.startswith("Remv ") and len(ln.split()) > 1]
     err = p.stderr.strip()[-500:] if p.returncode else ""
     return (will or [name]), err
@@ -200,7 +209,7 @@ def preview(rec, purge_residues=False, autoremove=True, cfg=CFG):
 
     will_remove, err = [target], ""
     if t == "deb":
-        will_remove, err = _apt_dry_run(target, cfg)
+        will_remove, err = _apt_dry_run(target, autoremove, cfg)
         steps = _deb_steps(rec, target, purge_residues, autoremove, cfg)
     elif t == "snap":
         steps = _snap_steps(rec, target, purge_residues)
