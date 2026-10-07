@@ -97,6 +97,8 @@ def cmd_list(args):
         return _write(report.render_json(inv, recs), args.output)
     if args.removable:
         text = report.render_uninstall_list(recs)
+    elif args.loose:
+        text = report.render_loose_list(recs)
     else:
         text = report.render_list(recs, inv, show_all=args.all)
     return _write(text, args.output)

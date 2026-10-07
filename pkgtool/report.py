@@ -253,3 +253,21 @@ def render_uninstall_list(records):
             ("版本", lambda r: r.version, 24, "<"),
             ("判定依据", lambda r: r.class_reason, 30, "<")]
     return render_table(records, cols)
+
+
+def render_loose_list(records):
+    """`pkgtool list --loose` 的视图：重点是路径和占多少空间。"""
+    total = round(sum(r.extra.get("size_mb", 0) for r in records), 1)
+    cols = [("类型", lambda r: r.pkg_type, 10, "<"),
+            ("名称", lambda r: r.name, 30, "<"),
+            ("版本", lambda r: r.version, 22, "<"),
+            ("大小", lambda r: f"{r.extra.get('size_mb', 0)} MB", 10, ">"),
+            ("状态", lambda r: labels.loose_state(r), 16, "<"),
+            ("路径", lambda r: r.extra.get("loose", ""), 60, "<")]
+    rows = sorted(records, key=lambda r: -r.extra.get("size_mb", 0))
+    table = render_table(rows, cols)
+    dup = sum(1 for r in rows if r.extra.get("state") == "duplicate")
+    note = f"\n  共 {len(rows)} 个包文件，占 {total} MB"
+    if dup:
+        note += f"；其中 {dup} 个已安装，文件只是留着占地方（可直接删）"
+    return table + note
