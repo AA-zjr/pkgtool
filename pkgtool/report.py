@@ -255,6 +255,29 @@ def render_uninstall_list(records):
     return render_table(records, cols)
 
 
+def render_clean(targets):
+    """`pkgtool clean --list`：可清理目标一览（每项两行：概要 + 路径与执行方式）。"""
+    if not targets:
+        return "  （没有可清理的目标）"
+    from . import clean as _clean
+    out = []
+    for t in targets:
+        head = pad(f"  {t.size_text:>9}", 14) \
+            + truncate(labels.clean_label(t.kind, t.label), 46)
+        if t.privileged:
+            head += "  [需 sudo]"
+        out.append(head)
+        how = " ".join(t.argv) if t.argv else "删除文件"
+        extra = " · ".join(x for x in (t.detail, how, t.note) if x)
+        out.append(pad("", 14) + truncate(extra, 100))
+    known = _clean.total_mb(targets)
+    unknown = sum(1 for t in targets if not t.size_known)
+    total = f"  合计可回收 {known / 1024:.2f} GB（{len(targets)} 项"
+    total += f"，另有 {unknown} 项体积未知" if unknown else ""
+    out.append(total + "）")
+    return "\n".join(out)
+
+
 def render_loose_list(records):
     """`pkgtool list --loose` 的视图：重点是路径和占多少空间。"""
     total = round(sum(r.extra.get("size_mb", 0) for r in records), 1)

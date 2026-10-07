@@ -107,6 +107,10 @@ class Config:
     pip_prune_dirs: frozenset = frozenset(
         {".cache", "node_modules", "__pycache__", ".npm", ".bun", ".rustup"})
 
+    # ---- 磁盘回收（clean 子命令）----
+    pip_cache_dir: str = ".cache/pip"   # 相对 home，纯缓存，删了只会重新下载
+    conda_pkgs_subdir: str = "pkgs"     # <conda 发行版根>/pkgs 是包缓存
+
     # ---- 判定阈值 ----
     birth_margin_hours: int = 24     # 日志最早事件 + 此窗口内安装 = 镜像自带
     index_cache_ttl: float = 300.0   # apt 索引解析缓存（apt update 后自动失效）
@@ -181,6 +185,15 @@ class Config:
     def python_scan_roots(self):
         """找 conda-meta / pyvenv.cfg 的扫描根：主目录 + 系统目录。"""
         return (user_home(),) + tuple(self.conda_scan_roots)
+
+    @property
+    def pip_cache_path(self):
+        return os.path.join(user_home(), self.pip_cache_dir)
+
+    @property
+    def trash_dir(self):
+        """freedesktop 回收站根目录（--trash 时用）。"""
+        return os.path.join(user_home(), ".local", "share", "Trash")
 
     def dump(self):
         """→ {字段: 值}，供 `pkgtool list -v` 一类诊断输出。"""

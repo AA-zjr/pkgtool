@@ -9,7 +9,7 @@
 import argparse
 import sys
 
-from . import inventory, labels, report
+from . import clean, inventory, labels, report, tui
 from .apt import actions, lists
 from .backends import pip as pip_backend
 from .config import CFG
@@ -262,6 +262,52 @@ def cmd_remove(args):
     return _fail(res)
 
 
+def cmd_clean(args):
+    targets = clean.collect_targets(CFG, kinds=args.kind or None,
+                                    min_size_mb=args.min_size)
+    if not targets:
+        print("没有可清理的目标")
+        return 0
+    if args.list:
+        return _write(report.render_clean(targets), args.output)
+
+    def do(target):
+        res = clean.delete(target, trash=args.trash, cfg=CFG)
+        if not res.ok:
+            return False, res.error or "失败"
+        how = "（移入回收站）" if (args.trash and target.paths
+                                  and not target.privileged) else ""
+        return True, f"已释放 {target.size_text}{how}"
+
+    if not args.yes:
+        rows = [tui.Row(label=labels.clean_label(t.kind, t.label),
+                        detail=t.detail, note=t.note, size_mb=t.size_mb)
+                for t in targets]
+        result = tui.browse("磁盘回收", rows, lambda i: do(targets[i]),
+                            hint="Enter 删除当前项 · 空格 标记 · d 删全部标记 · "
+                                 "a 全标 · q 退出")
+        if result is not None:
+            tried, done, freed = result
+            print(f"\n完成：{done}/{tried} 项成功，释放 {clean.size_text(freed)}")
+            return 0 if done == tried else 1
+        _err("当前不是交互终端，未删除任何东西。")
+        _err("用 --list 查看可清理项，或加 -y 直接删除全部。")
+        return 1
+
+    ok = failed = 0
+    freed = 0.0
+    for t in targets:
+        good, msg = do(t)
+        print(f"{'✓' if good else '✗'} "
+              f"{labels.clean_label(t.kind, t.label)}: {msg}")
+        ok += 1 if good else 0
+        failed += 0 if good else 1
+        freed += t.size_mb if good and t.size_known else 0
+    print(f"\n完成：{ok} 项成功" + (f"，{failed} 项失败" if failed else "")
+          + f"，释放 {clean.size_text(freed)}")
+    return 1 if failed else 0
+
+
 def cmd_config(args):
     out = []
     for k, v in sorted(CFG.dump().items()):
@@ -351,6 +397,20 @@ def build_parser():
     p.add_argument("--check-updates", action="store_true")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_remove)
+
+    p = sub.add_parser("clean", help="磁盘回收：散落包文件、apt/pip/conda 缓存、"
+                                     "snap 旧修订、flatpak 无用运行时")
+    p.add_argument("-k", "--kind", action="append", choices=clean.KINDS,
+                   help="只处理某类目标（可重复给多次；默认全部）")
+    p.add_argument("--min-size", type=float, default=0.0, metavar="MB",
+                   help="只处理不小于该体积（MB）的目标")
+    p.add_argument("--list", action="store_true", help="只列出可清理项，不删除")
+    p.add_argument("--trash", action="store_true",
+                   help="移到回收站而不是真删（仅对普通权限的文件类目标有效）")
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="非交互：直接删除全部匹配目标")
+    p.add_argument("-o", "--output", default="", help="配合 --list 写入文件")
+    p.set_defaults(func=cmd_clean)
 
     p = sub.add_parser("config", help="打印当前生效的全部路径与阈值")
     p.set_defaults(func=cmd_config)

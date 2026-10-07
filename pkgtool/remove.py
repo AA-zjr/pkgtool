@@ -13,12 +13,11 @@
 import glob
 import os
 import shlex
-import shutil
 import subprocess
 from dataclasses import dataclass, field
 
 from .apt import actions
-from .base import file_size_mb, is_safe_name
+from .base import delete_paths, file_size_mb, is_safe_name, is_under_home
 from .classify import is_removable
 from .config import CFG
 from .labels import block_reason
@@ -44,11 +43,6 @@ class Plan:
         out = ["sudo " + " ".join(shlex.quote(a) for a in argv) for argv in self.steps]
         out += [f"rm -rf {shlex.quote(p)}" for p in self.user_paths]
         return " && ".join(out)
-
-
-def _under_home(path, cfg):
-    home = os.path.abspath(cfg.home) + os.sep
-    return os.path.abspath(path).startswith(home)
 
 
 def _target(rec):
@@ -221,13 +215,13 @@ def preview(rec, purge_residues=False, autoremove=True, cfg=CFG):
     residues = find_residues(rec, cfg) if purge_residues else []
     user_paths = []
     for path, _size in residues:
-        if _under_home(path, cfg):
+        if is_under_home(path, cfg):
             user_paths.append(path)          # 属于当前用户，不需要 root
         else:
             steps.append(["rm", "-rf", "--", path])
     if t == "appimage":
         # 便携应用本体就是一个文件：主目录内普通权限删，/opt 一类才需要特权
-        if _under_home(target, cfg):
+        if is_under_home(target, cfg):
             user_paths.append(target)
         else:
             steps.append(["rm", "-f", "--", target])
@@ -251,23 +245,8 @@ def execute(plan, password=None, on_line=None, cfg=CFG):
         if not r.ok:
             return actions.Result(ok=False, returncode=r.returncode,
                                   output="\n".join(outputs), error=r.error, command=argv)
-    removed, failed = _remove_paths(plan.user_paths)
+    removed, failed = delete_paths(plan.user_paths)
     outputs += [f"已删除残留 {p}" for p in removed]
     return actions.Result(ok=not failed, output="\n".join(o for o in outputs if o),
                           error="; ".join(failed), file=",".join(removed),
                           command=plan.steps[0] if plan.steps else [])
-
-
-def _remove_paths(paths):
-    """普通用户权限删除 → (成功列表, 失败信息列表)。"""
-    removed, failed = [], []
-    for p in paths:
-        try:
-            if os.path.isdir(p) and not os.path.islink(p):
-                shutil.rmtree(p)
-            else:
-                os.unlink(p)
-            removed.append(p)
-        except OSError as e:
-            failed.append(f"{p}: {e}")
-    return removed, failed

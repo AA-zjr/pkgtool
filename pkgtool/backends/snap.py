@@ -44,8 +44,8 @@ class SnapBackend(Backend):
                                  cols[4] if len(cols) > 4 else "")
         return info
 
-    def _stored_revisions(self):
-        """→ {包名: {修订号: .snap 文件路径}}"""
+    def stored_revisions(self):
+        """→ {包名: {修订号: .snap 文件路径}}。clean 子命令用它找旧修订。"""
         stored = {}
         for f in glob.glob(os.path.join(self.cfg.snap_store_dir, "*.snap")):
             m = _SNAP_FILE_RE.match(os.path.basename(f))
@@ -53,8 +53,9 @@ class SnapBackend(Backend):
                 stored.setdefault(m.group(1), {})[m.group(2)] = f
         return stored
 
-    def _active_revision(self, name, revs):
-        """/snap/<name>/current 符号链接指向的修订；链接缺失时取最高修订兜底。"""
+    def active_revision(self, name, revs):
+        """/snap/<name>/current 符号链接指向的修订；链接缺失时取最高修订兜底。
+        注意按整数比：修订号是数字，字符串比较会得出 "9" > "10"。"""
         try:
             tgt = os.readlink(os.path.join(self.cfg.snap_mount_dir, name, "current"))
             if tgt.isdigit() and tgt in revs:
@@ -80,8 +81,8 @@ class SnapBackend(Backend):
     def collect(self):
         info = self._list_info()
         records = []
-        for name, revs in sorted(self._stored_revisions().items()):
-            active = self._active_revision(name, revs)
+        for name, revs in sorted(self.stored_revisions().items()):
+            active = self.active_revision(name, revs)
             version, tracking, publisher = "?", "", ""
             row = info.get(name)
             if row and row[1] == active:

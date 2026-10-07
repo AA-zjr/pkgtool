@@ -42,7 +42,7 @@ BLOCK_REASONS = {
     PkgClass.BASE: "基础包，删除会破坏系统（dpkg/apt/bash 一类）",
     PkgClass.LIBRARY: "库/依赖，由软件自动管理，不应单独删除",
     PkgClass.SYSTEM: "系统组件，未通过“用户软件”判定，不给删",
-    PkgClass.FILE: "散落包文件，不是已安装记录（直接删文件即可）",
+    PkgClass.FILE: "散落包文件，不是已安装记录 —— 用 `pkgtool clean -k loose` 删除",
 }
 
 # 表格用的短标签（CHANNEL_LABEL/ORIGIN_LABEL 是给详情页用的完整文案）
@@ -64,6 +64,15 @@ ORIGIN_SHORT = {
 LOOSE_STATE_LABEL = {
     "duplicate": "已安装·重复文件",
     "uninstalled": "未安装",
+}
+
+CLEAN_KIND_LABEL = {
+    "loose": "散落包文件",
+    "apt-cache": "apt 下载缓存",
+    "snap-rev": "snap 旧修订",
+    "flatpak-unused": "flatpak 无用运行时",
+    "pip-cache": "pip 缓存",
+    "conda-cache": "conda 包缓存",
 }
 
 # 发行版官方源的 Label 关键字（取自 Release 文件的 Label/Origin，属外部数据而非本工具结论）
@@ -94,6 +103,12 @@ def origin_short(rec):
 
 def loose_state(rec):
     return LOOSE_STATE_LABEL.get(rec.extra.get("state", ""), rec.extra.get("state", ""))
+
+
+def clean_label(kind, label=""):
+    """磁盘回收条目的标题：类别文案 + 条目细节（细节为空时只显示类别）。"""
+    head = CLEAN_KIND_LABEL.get(kind, kind)
+    return f"{head} · {label}" if label else head
 
 
 def class_text(pkg_class):

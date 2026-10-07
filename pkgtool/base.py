@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -51,6 +52,27 @@ def file_size_mb(path):
     except OSError:
         return 0.0
     return round(total / BYTES_PER_MB, 1)
+
+
+def is_under_home(path, cfg=CFG):
+    """路径是否在当前用户主目录内（决定删除要不要特权）。"""
+    home = os.path.abspath(cfg.home) + os.sep
+    return os.path.abspath(path).startswith(home)
+
+
+def delete_paths(paths):
+    """普通用户权限删除文件/目录 → (成功列表, 失败信息列表)。"""
+    removed, failed = [], []
+    for p in paths:
+        try:
+            if os.path.isdir(p) and not os.path.islink(p):
+                shutil.rmtree(p)
+            else:
+                os.unlink(p)
+            removed.append(p)
+        except OSError as e:
+            failed.append(f"{p}: {e}")
+    return removed, failed
 
 
 class Channel(str, Enum):

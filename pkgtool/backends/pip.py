@@ -46,9 +46,10 @@ def _site_dirs(root):
     return out
 
 
-def _conda_dists(cfg):
+def conda_dists(cfg):
     """常见位置的 conda 发行版根（home、/opt、/usr/local）。
-    conda-meta 目录存在才算真根，避免把同名普通目录当成发行版。"""
+    conda-meta 目录存在才算真根，避免把同名普通目录当成发行版。
+    clean 子命令也用它定位 conda 包缓存。"""
     out = []
     bases = (cfg.home, cfg.python_system_root) + tuple(cfg.conda_scan_roots)
     for base in bases:
@@ -130,7 +131,7 @@ def find_python_envs(cfg=CFG):
                 roots.append((label, root))
 
         # 1) conda 发行版 × conda info 权威环境列表（含前缀式）
-        for dist in _conda_dists(cfg):
+        for dist in conda_dists(cfg):
             dname = os.path.basename(dist)
             drp = os.path.realpath(dist)
             envs_dir = os.path.realpath(os.path.join(dist, "envs"))
