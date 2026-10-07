@@ -17,7 +17,7 @@ import os
 import re
 import subprocess
 
-from ..base import Backend, OriginKind, PackageRecord
+from ..base import Backend, OriginKind, PackageRecord, file_size_mb
 from ..config import CFG
 
 _APP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-]*\.[A-Za-z0-9\-]+$")
@@ -138,5 +138,6 @@ class FlatpakBackend(Backend):
             variant=f"{arch}/{branch}",
             origin_kind=OriginKind.REPO if origin else OriginKind.LOCAL,
             origin_repos=[origin] if origin else [f"flatpak({inst_label})"],
+            size_mb=file_size_mb(os.path.join(commit_dir, "files")),
             install_path=os.path.join(commit_dir, "files"),
             executables=exes, extra=extra)

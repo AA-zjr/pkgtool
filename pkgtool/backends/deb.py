@@ -15,7 +15,7 @@
 """
 import os
 
-from ..apt import dpkg, lists, logs
+from ..apt import deps, dpkg, lists, logs
 from ..base import (Backend, Channel, OriginKind, PackageRecord, file_size_mb,
                     scan_file_areas)
 from ..config import CFG
@@ -93,10 +93,12 @@ class DebBackend(Backend):
         ext_autos, ext_path = dpkg.extended_states(cfg)
         cutoff = logs.birth_cutoff(earliest, cfg)
         index = lists.load_index(cfg)
+        graph = deps.DepGraph(installed, manual)
 
         records = []
         for name in sorted(installed):
-            version = installed[name][0]
+            entry = installed[name]
+            version = entry.version
             files = dpkg.package_files(name, cfg)[0]
             exes = [p for p in files
                     if any(p.startswith(d + "/") for d in cfg.bin_dirs)
@@ -126,11 +128,14 @@ class DebBackend(Backend):
 
             kind, repos = resolve_origin(name, version, index)
             candidate = index.candidate(name)
+            own, dep_mb, _total = graph.total_mb(name)
             records.append(PackageRecord(
                 pkg_type=self.pkg_type, name=name, version=version,
                 origin_kind=kind, origin_repos=repos, channel=channel,
                 in_repo=name in index,
                 candidate=candidate if lists.is_upgrade(candidate, version) else "",
+                size_mb=own, exclusive_deps=sorted(graph.exclusive(name)),
+                deps_size_mb=dep_mb,
                 install_path=";".join(top_dirs[:cfg.top_dirs_limit]),
                 executables=exes, first_install=log_ts, extra=extra))
 
@@ -153,10 +158,10 @@ class DebBackend(Backend):
                 # 合并成一条会把"这个 .deb 可以删了回收 220MB"的信息丢掉。
                 variant=os.path.basename(path),
                 origin_kind=OriginKind.FILE,
-                in_repo=name in index, extra={
+                in_repo=name in index,
+                size_mb=file_size_mb(path), extra={
                     "loose": path,
                     "found_in": os.path.basename(os.path.dirname(path)),
                     "state": "duplicate" if name in installed else "uninstalled",
-                    "size_mb": file_size_mb(path),
                     "repo_kind": kind.value, "repo_labels": repos}))
         return out

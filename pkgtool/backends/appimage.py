@@ -107,7 +107,7 @@ class AppImageBackend(Backend):
             display, exes = _payload_listing(path, off, cfg)
             if display:
                 name = display
-        extra = {"found_at": path, "size_mb": file_size_mb(path), "mtime": mtime}
+        extra = {"found_at": path, "mtime": mtime}
         if loose:
             extra.update(loose=path, state="uninstalled",
                          found_in=os.path.basename(os.path.dirname(path)))
@@ -118,6 +118,7 @@ class AppImageBackend(Backend):
             # 否则 /opt 里已安置的和下载目录里散落的那份会互相顶掉
             variant=fn,
             origin_kind=OriginKind.FILE if loose else OriginKind.LOCAL,
+            size_mb=file_size_mb(path),
             install_path=path, executables=exes, extra=extra)
 
     def collect(self):

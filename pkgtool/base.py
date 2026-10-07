@@ -119,6 +119,9 @@ class PackageRecord:
     class_reason: str = ""
     in_repo: bool = False
     candidate: str = ""
+    size_mb: float = 0.0         # 包自身已安装体积
+    exclusive_deps: list = field(default_factory=list)   # 只被它一个包依赖的包
+    deps_size_mb: float = 0.0    # 上面那些独占依赖的体积合计
     install_path: str = ""
     executables: list = field(default_factory=list)
     first_install: str = ""
@@ -138,19 +141,28 @@ class PackageRecord:
         """磁盘上的包文件（不是一条已安装记录）。"""
         return bool(self.extra.get("loose"))
 
+    @property
+    def total_size_mb(self):
+        """自身 + 独占依赖。独占依赖 = 只有这个包在用、没人共用的那些，
+        删掉这个包它们也就没用了（定义见 apt/deps.py）。"""
+        return round(self.size_mb + self.deps_size_mb, 1)
+
     def to_row(self):
         """→ CSV 行。全部用 code，extra 用 JSON（原先 k=v 空格拼接会被含空格的值破坏）。"""
         return [self.pkg_type, self.name, self.variant, self.version,
                 _code(self.origin_kind), ";".join(self.origin_repos),
                 _code(self.channel), int(self.in_repo), self.candidate,
-                _code(self.pkg_class), self.class_reason, self.install_path,
+                _code(self.pkg_class), self.class_reason,
+                self.size_mb, len(self.exclusive_deps), self.deps_size_mb,
+                self.total_size_mb, self.install_path,
                 ";".join(self.executables), self.first_install,
                 json.dumps(self.extra, ensure_ascii=False, sort_keys=True)]
 
 
 CSV_HEADER = ["pkg_type", "name", "variant", "version", "origin_kind",
               "origin_repos", "channel", "in_repo", "candidate", "pkg_class",
-              "class_reason", "install_path", "executables", "first_install",
+              "class_reason", "size_mb", "exclusive_deps", "deps_size_mb",
+              "total_size_mb", "install_path", "executables", "first_install",
               "extra"]
 
 

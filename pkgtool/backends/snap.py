@@ -14,7 +14,7 @@ import os
 import re
 import subprocess
 
-from ..base import Backend, OriginKind, PackageRecord
+from ..base import Backend, OriginKind, PackageRecord, file_size_mb
 from ..config import CFG
 
 _SNAP_FILE_RE = re.compile(r"(.+)_(\d+)\.snap$")
@@ -100,6 +100,7 @@ class SnapBackend(Backend):
                 # 有追踪频道 = 来自 snap store 且能自动刷新；否则只是本地缓存目录里的文件
                 origin_kind=OriginKind.REPO if tracking else OriginKind.LOCAL,
                 origin_repos=[f"{_STORE_LABEL} {tracking}".strip()] if tracking else [],
+                size_mb=file_size_mb(revs[active]),
                 install_path=f"{self.cfg.snap_mount_dir}/{name}",
                 executables=self._executables(name, active), extra=extra))
         return records

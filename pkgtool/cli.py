@@ -49,7 +49,9 @@ def _collect(args):
 
 def _write(text, path=None):
     if not path:
-        print(text)
+        # render_csv 的输出本身已带结尾换行，再用 print 会多出一个空行，
+        # csv.reader 会把它读成一条 0 列的记录
+        print(text, end="" if text.endswith("\n") else "\n")
         return 0
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(text if text.endswith("\n") else text + "\n")
@@ -273,7 +275,7 @@ def cmd_clean(args):
                                  "a 全标 · q 退出")
         if result is not None:
             tried, done, freed = result
-            print(f"\n完成：{done}/{tried} 项成功，释放 {clean.size_text(freed)}")
+            print(f"\n完成：{done}/{tried} 项成功，释放 {labels.size_text(freed)}")
             return 0 if done == tried else 1
         _err("当前不是交互终端，未删除任何东西。")
         _err("用 --list 查看可清理项，或加 -y 直接删除全部。")
@@ -289,7 +291,7 @@ def cmd_clean(args):
         failed += 0 if good else 1
         freed += t.size_mb if good and t.size_known else 0
     print(f"\n完成：{ok} 项成功" + (f"，{failed} 项失败" if failed else "")
-          + f"，释放 {clean.size_text(freed)}")
+          + f"，释放 {labels.size_text(freed)}")
     return 1 if failed else 0
 
 

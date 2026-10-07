@@ -13,6 +13,7 @@ import locale
 import sys
 from dataclasses import dataclass
 
+from . import labels
 from .report import truncate, width
 
 _STATE_PENDING, _STATE_MARKED, _STATE_DONE, _STATE_FAIL = range(4)
@@ -69,9 +70,10 @@ def is_backspace(kind, val):
 
 
 def size_text(mb):
+    """右对齐到 9 列的体积文案（browse 列表用）；文案本身走 labels，不另写一套。"""
     if mb <= 0:
-        return "      —"
-    return f"{mb / 1024:6.2f} GB" if mb >= 1024 else f"{mb:6.1f} MB"
+        return "        —"
+    return f"{labels.size_text(mb):>9}"
 
 
 def _init_colors():

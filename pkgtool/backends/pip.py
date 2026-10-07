@@ -20,7 +20,7 @@ import subprocess
 import threading
 import time
 
-from ..base import Backend, OriginKind, PackageRecord
+from ..base import BYTES_PER_MB, Backend, OriginKind, PackageRecord
 from ..config import CFG
 
 _DIST_INFO_RE = re.compile(
@@ -222,6 +222,23 @@ def _parse_dist_info(di):
     return name, ver, summary, exes
 
 
+def _record_size(di):
+    """从 dist-info/RECORD 读精确字节数（第三列），比遍历目录快也更准。
+    RECORD 路径可能指向 site-packages 之外（../../../bin/pip），但体积照算。
+    读不到就退回 0，不猜。"""
+    total = 0
+    try:
+        with open(os.path.join(di, "RECORD"), encoding="utf-8",
+                  errors="replace") as fh:
+            for line in fh:
+                parts = line.rstrip("\n").rsplit(",", 2)
+                if len(parts) == 3 and parts[2].strip().isdigit():
+                    total += int(parts[2])
+    except OSError:
+        return 0.0
+    return round(total / BYTES_PER_MB, 1)
+
+
 class PipBackend(Backend):
     pkg_type = "pip"
 
@@ -250,6 +267,7 @@ class PipBackend(Backend):
                         variant=label,
                         origin_kind=OriginKind.REPO,
                         origin_repos=[f"pypi({label})"],
+                        size_mb=_record_size(di),
                         install_path=sp,
                         executables=exes[:self.cfg.exec_list_limit],
                         first_install=mtime,

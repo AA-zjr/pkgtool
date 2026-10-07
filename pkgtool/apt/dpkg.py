@@ -8,15 +8,55 @@ extended_states 是 auto/manual 标记的权威存储，兼容两种格式/位�
 """
 import os
 import subprocess
+from dataclasses import dataclass
 
 from ..config import CFG
 
 
+@dataclass(slots=True)
+class StatusEntry:
+    """/var/lib/dpkg/status 里一个包的全部所需字段。
+    体积与依赖都在这里一次读出来，避免为算大小再去遍历文件树、
+    为算依赖图再解析一遍 status。"""
+    name: str
+    version: str = ""
+    status: str = ""
+    installed_size_kb: int = 0
+    depends: str = ""
+    pre_depends: str = ""
+    recommends: str = ""
+
+    @property
+    def size_mb(self):
+        return round(self.installed_size_kb / 1024.0, 1)
+
+
+_STATUS_FIELDS = {
+    "Package": "name", "Version": "version", "Status": "status",
+    "Installed-Size": "installed_size_kb", "Depends": "depends",
+    "Pre-Depends": "pre_depends", "Recommends": "recommends",
+}
+
+
 def installed(cfg=CFG):
-    """解析 dpkg status → {包名: (版本, 状态串)}。
+    """解析 dpkg status → {包名: StatusEntry}。
     多架构同名包（gcc:amd64 / gcc:i386）按名字归并，后者覆盖前者。"""
     pkgs = {}
-    name = ver = status = None
+    cur = {}
+
+    def flush():
+        name = cur.get("name")
+        if name:
+            size = cur.get("installed_size_kb", "")
+            pkgs[name] = StatusEntry(
+                name=name, version=cur.get("version", ""),
+                status=cur.get("status", ""),
+                installed_size_kb=int(size) if str(size).isdigit() else 0,
+                depends=cur.get("depends", ""),
+                pre_depends=cur.get("pre_depends", ""),
+                recommends=cur.get("recommends", ""))
+        cur.clear()
+
     try:
         fh = open(cfg.dpkg_status, errors="replace")
     except OSError:
@@ -24,17 +64,16 @@ def installed(cfg=CFG):
     with fh:
         for line in fh:
             if line == "\n":
-                if name:
-                    pkgs[name] = (ver or "", status or "")
-                name = ver = status = None
-            elif line.startswith("Package: "):
-                name = line.split(":", 1)[1].strip()
-            elif line.startswith("Version: "):
-                ver = line.split(":", 1)[1].strip()
-            elif line.startswith("Status: "):
-                status = line.split(":", 1)[1].strip()
-    if name:
-        pkgs[name] = (ver or "", status or "")
+                flush()
+                continue
+            if line[0] in " \t":          # 续行（Description 正文等）
+                continue
+            key, sep, value = line.partition(": ")
+            if sep:
+                field = _STATUS_FIELDS.get(key)
+                if field and field not in cur:
+                    cur[field] = value.strip()
+    flush()
     return pkgs
 
 

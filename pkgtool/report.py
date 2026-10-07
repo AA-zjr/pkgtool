@@ -58,13 +58,16 @@ def render_table(rows, columns, indent="  "):
 
 # ---- list ----
 
+# 列宽是刻意压过的：类型/名称/版本/大小/通道/类别/首装 合计约 114 列，
+# 常见终端放得下。「来源」不在这张表里——它和「通道」高度重复，且 info 详情、
+# summary 与 CSV 里都有。
 _LIST_COLUMNS = [
-    ("类型", lambda r: r.pkg_type, 16, "<"),
-    ("名称", lambda r: r.name, 34, "<"),
-    ("版本", lambda r: r.version + (" ↑" if r.upgradable else ""), 26, "<"),
+    ("类型", lambda r: r.pkg_type, 10, "<"),
+    ("名称", lambda r: r.name, 30, "<"),
+    ("版本", lambda r: r.version + (" ↑" if r.upgradable else ""), 22, "<"),
+    ("大小", lambda r: labels.size_pair_text(r), 13, ">"),
     ("通道", lambda r: labels.channel_short(r.channel), 9, "<"),
     ("类别", lambda r: labels.class_text(r.pkg_class), 8, "<"),
-    ("来源", lambda r: labels.origin_short(r), 30, "<"),
     ("首次安装", lambda r: (r.first_install or "—")[:10], 10, "<"),
 ]
 
@@ -158,9 +161,16 @@ def render_detail(rec):
     add("卸载类别", f"{labels.class_text(rec.pkg_class)}（{rec.class_reason}）")
     add("首次安装", rec.first_install)
     add("安装路径", rec.install_path)
+    if rec.size_mb or rec.deps_size_mb:
+        if rec.exclusive_deps:
+            add("体积", f"自身 {labels.size_text(rec.size_mb)} + 独占依赖 "
+                         f"{labels.size_text(rec.deps_size_mb)}"
+                         f"（{len(rec.exclusive_deps)} 个）= "
+                         f"{labels.size_text(rec.total_size_mb)}")
+        else:
+            add("体积", f"{labels.size_text(rec.size_mb)}（依赖都与其他包共用）")
     if rec.is_loose_file:
         add("文件状态", labels.loose_state(rec))
-        add("文件大小", f"{rec.extra.get('size_mb', '?')} MB")
     add("可执行文件", f"{len(rec.executables)} 个")
     add("更新通道", labels.update_advice(rec))
 
@@ -172,17 +182,27 @@ def render_detail(rec):
         out.append(f"\n  可执行文件（{len(rec.executables)}）:")
         out += [f"    {e}" for e in rec.executables]
 
+    if rec.exclusive_deps:
+        out.append(f"\n  独占依赖（{len(rec.exclusive_deps)} 个，只有这个包在用，"
+                   f"合计 {labels.size_text(rec.deps_size_mb)}）:")
+        out += [f"    {d}" for d in rec.exclusive_deps[:30]]
+        if len(rec.exclusive_deps) > 30:
+            out.append(f"    … 其余 {len(rec.exclusive_deps) - 30} 个")
+
     extra = {k: v for k, v in rec.extra.items()
-             if k not in ("loose", "state", "size_mb", "desktop_id", "apt_mark",
-                          "ext_states", "mark_conflict", "top_dirs", "env")}
+             if k not in ("loose", "state", "desktop_id", "apt_mark",
+                          "ext_states", "mark_conflict", "top_dirs", "env",
+                          "commands")}   # commands 已在「可执行文件」里列过
     if extra:
         out.append("\n  格式特有字段:")
         ew = max(width(k) for k in extra)
         out += [f"    {pad(k, ew)}  {v}" for k, v in sorted(extra.items())]
 
-    for k in ("apt_mark", "ext_states", "mark_conflict"):
-        if rec.extra.get(k):
-            out.append(f"    {k} = {rec.extra[k]}")
+    marks = [(k, rec.extra[k]) for k in ("apt_mark", "ext_states", "mark_conflict")
+             if rec.extra.get(k)]
+    if marks:
+        out.append("\n  apt 标记:")
+        out += [f"    {k} = {v}" for k, v in marks]
     if is_removable(rec):
         out.append("\n  ✓ 允许卸载：pkgtool remove " + rec.name)
     else:
@@ -280,17 +300,17 @@ def render_clean(targets):
 
 def render_loose_list(records):
     """`pkgtool list --loose` 的视图：重点是路径和占多少空间。"""
-    total = round(sum(r.extra.get("size_mb", 0) for r in records), 1)
+    total = round(sum(r.size_mb for r in records), 1)
     cols = [("类型", lambda r: r.pkg_type, 10, "<"),
             ("名称", lambda r: r.name, 30, "<"),
             ("版本", lambda r: r.version, 22, "<"),
-            ("大小", lambda r: f"{r.extra.get('size_mb', 0)} MB", 10, ">"),
+            ("大小", lambda r: labels.size_text(r.size_mb), 10, ">"),
             ("状态", lambda r: labels.loose_state(r), 16, "<"),
             ("路径", lambda r: r.extra.get("loose", ""), 60, "<")]
-    rows = sorted(records, key=lambda r: -r.extra.get("size_mb", 0))
+    rows = sorted(records, key=lambda r: -r.size_mb)
     table = render_table(rows, cols)
     dup = sum(1 for r in rows if r.extra.get("state") == "duplicate")
-    note = f"\n  共 {len(rows)} 个包文件，占 {total} MB"
+    note = f"\n  共 {len(rows)} 个包文件，占 {labels.size_text(total)}"
     if dup:
         note += f"；其中 {dup} 个已安装，文件只是留着占地方（可直接删）"
     return table + note

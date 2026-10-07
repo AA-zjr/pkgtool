@@ -26,33 +26,43 @@ VIEWS = ("全部包", "本地自装", "可升级", "散落包文件", "磁盘回
          "apt 搜索", "Python 环境")
 _LIST, _LOCAL, _UPGRADABLE, _LOOSE, _CLEAN, _SEARCH, _ENV = range(len(VIEWS))
 _SEARCH_LIMIT = 80
+# t 键循环的包类型；flatpak 一项同时覆盖 flatpak 与 flatpak-runtime
+_TYPE_CYCLE = ("all", "deb", "snap", "flatpak", "appimage", "pip")
 
 _HELP = """按键一览
 
   浏览
     ↑ ↓ / k j         上下移动          PgUp PgDn   翻页
     g  G              跳到开头 / 结尾    Tab / 1-7   切换视图
-    /                 编辑过滤词（apt 搜索视图里就是搜索词）
+    /                 搜索 / 过滤（apt 搜索视图里就是查询词）
+    t                 包类型筛选：全部 → deb → snap → flatpak → appimage → pip
     s                 显示 / 隐藏系统预装与自动依赖
     R                 重新采集           ?           本帮助
     q 或 Esc          退出（详情里是返回）
 
   对选中的包
-    Enter             查看详情
-    r                 卸载（先 dry-run 预览，确认后才执行）
-    u                 升级
-    d                 下载 .deb（仅 deb，不需要 root）
+    Enter             查看详情           r           卸载（先 dry-run 预览再确认）
+    u                 升级               d           下载 .deb（仅 deb，不需 root）
 
   磁盘回收视图
-    Enter             删除当前项        空格        标记 / 取消标记
-    x                 删除全部标记项     t           切换「移入回收站 / 真删」
+    Enter             删除当前项         空格        标记 / 取消标记
+    x                 删除全部标记项      T           切换「移入回收站 / 真删」
 
   apt 搜索视图
     Enter             看该包的全部候选版本
     i                 安装 / 升级到候选版本      d   只下载 .deb
 
+「大小」列的含义
+    12.3 MB           包自身的已安装体积
+    2.1 GB (14)       自身 + 14 个「独占依赖」的合计。独占依赖指只被这一个包
+                      硬依赖、且 apt 标记为 auto 的包（取传递闭包）——删掉这个包
+                      它们就没用了。库被多个包共用时不计入，所以微信、clash-verge
+                      这类应用通常显示 0 个独占依赖。
+                      注意这与卸载时实际释放的空间不是一回事：卸载预览走的是
+                      apt 的 --autoremove 模拟，含反向依赖级联，数字通常更大。
+
 说明：需要 root 的动作由 sudo 在终端上直接提示密码，本程序不经手密码。
-      卸载与清理都会先打印计划再确认；磁盘回收默认真删，按 t 可改成移入回收站。
+      卸载与清理都会先打印计划再确认；磁盘回收默认真删，按 T 可改成移入回收站。
 """
 
 
@@ -94,6 +104,7 @@ class App:
         self.view = _LIST
         self.filter = {i: "" for i in range(len(VIEWS))}
         self.show_system = False
+        self.ptype = "all"             # 包类型筛选，t 键循环
         self.env = ""
         self.trash = False
         self.items = []
@@ -129,16 +140,21 @@ class App:
 
     def _pkg_item(self, r):
         up = " ↑" if r.upgradable else ""
+        # 大小列右对齐后必须补一个空格，否则会和「通道」列粘成 "6.5 MBapt"
         head = (pad(r.pkg_type, 10) + pad(truncate(r.name, 30), 32)
-                + pad(truncate(r.version + up, 24), 26)
+                + pad(truncate(r.version + up, 22), 24)
+                + pad(labels.size_pair_text(r), 13, ">") + " "
                 + pad(labels.channel_short(r.channel), 10)
                 + pad(labels.class_text(r.pkg_class), 9)
-                + labels.origin_short(r))
+                + pad((r.first_install or "—")[:10], 10))
         bits = []
-        if r.first_install:
-            bits.append("首装 " + r.first_install[:10])
+        if r.origin_repos:
+            bits.append(labels.origin_short(r))
         if r.install_path:
-            bits.append(truncate(r.install_path, 34))
+            bits.append(truncate(r.install_path, 30))
+        if r.exclusive_deps:
+            bits.append(f"独占依赖 {len(r.exclusive_deps)} 个 "
+                        f"{labels.size_text(r.deps_size_mb)}")
         if r.executables:
             bits.append(f"{len(r.executables)} 个可执行")
         if r.extra.get("env"):
@@ -151,24 +167,25 @@ class App:
     def _pkgs_all(self):
         return [self._pkg_item(r) for r in inventory.select(
             self.inv, show_system=self.show_system, query=self.q,
-            env=self.env or None)]
+            pkg_type=self.ptype, env=self.env or None)]
 
     def _pkgs_local(self):
         return [self._pkg_item(r) for r in inventory.select(
             self.inv, only_local=True, show_system=self.show_system,
-            query=self.q, env=self.env or None)]
+            query=self.q, pkg_type=self.ptype, env=self.env or None)]
 
     def _pkgs_upgradable(self):
         return [self._pkg_item(r) for r in inventory.select(
-            self.inv, only_upgradable=True, query=self.q)]
+            self.inv, only_upgradable=True, query=self.q, pkg_type=self.ptype)]
 
     def _loose(self):
-        recs = inventory.select(self.inv, loose=True, query=self.q)
-        recs.sort(key=lambda r: -r.extra.get("size_mb", 0))
+        recs = inventory.select(self.inv, loose=True, query=self.q,
+                                pkg_type=self.ptype)
+        recs.sort(key=lambda r: -r.size_mb)
         return [Item("pkg",
                      pad(truncate(r.name, 30), 32)
                      + pad(truncate(r.version, 24), 26)
-                     + pad(f"{r.extra.get('size_mb', 0)} MB", 11)
+                     + pad(labels.size_text(r.size_mb), 11)
                      + labels.loose_state(r),
                      r.extra.get("loose", ""), r, "warn") for r in recs]
 
@@ -212,6 +229,17 @@ class App:
         return out or [Item("hint", "未探测到 Python 环境", "", None, "dim")]
 
     # ---------- 状态变更 ----------
+
+    def cycle_type(self):
+        """t 键循环包类型筛选：全部 → deb → snap → flatpak → appimage → pip。
+        直接走 inventory.select 的 pkg_type 参数，不另写一套过滤逻辑，
+        这样和 `pkgtool list -t xxx` 的结果永远一致。"""
+        i = _TYPE_CYCLE.index(self.ptype) if self.ptype in _TYPE_CYCLE else 0
+        self.ptype = _TYPE_CYCLE[(i + 1) % len(_TYPE_CYCLE)]
+        self.rebuild()
+        name = ("全部类型" if self.ptype == "all"
+                else labels.PKG_TYPE_LABEL.get(self.ptype, self.ptype))
+        self.msg = f"包类型：{name} → {len(self.items)} 项"
 
     def set_view(self, v):
         if v != self.view:
@@ -257,6 +285,11 @@ class App:
         if self.mode == "detail":
             self._draw_detail(scr, body_top, body_h, w)
         else:
+            head = self._header()
+            if head:
+                scr.text(body_top, 3, truncate(head, w - 4), "dim")
+                body_top += 1
+                body_h -= 1
             self.lv.per_item = 2 if body_h >= 12 else 1
             if not self.items:
                 scr.text(body_top + 1, 2, "（没有匹配的条目）", "dim")
@@ -267,14 +300,29 @@ class App:
         scr.text(h - 1, 0, " " + truncate(self.msg, w - 2), "dim")
         scr.refresh()
 
+    def _header(self):
+        """包列表视图的列头，列宽与 _pkg_item 一一对应（改一处必须改另一处）。
+        其他视图各自排版，不加列头。"""
+        if self.view not in (_LIST, _LOCAL, _UPGRADABLE):
+            return None
+        return (pad("类型", 10) + pad("名称", 32) + pad("版本", 24)
+                + pad("大小", 13, ">") + " " + pad("通道", 10)
+                + pad("类别", 9) + pad("首次安装", 10))
+
     def _tabs(self):
         return " ".join(f"[{i}]{n}" if i - 1 == self.view else f" {i} {n} "
                         for i, n in enumerate(VIEWS, start=1))
 
     def _status_bits(self):
         bits = [f"{len(self.items)} 项"]
+        sized = sum(i.data.size_mb for i in self.items
+                    if i.kind == "pkg" and i.data is not None)
+        if sized:
+            bits.append("体积 " + labels.size_text(round(sized, 1)))
         if self.q:
             bits.append(f"过滤 “{self.q}”")
+        if self.ptype != "all":
+            bits.append("类型 " + labels.PKG_TYPE_LABEL.get(self.ptype, self.ptype))
         if self.env:
             bits.append("env=" + self.env)
         if self.view in (_LIST, _LOCAL) and self.show_system:
@@ -301,10 +349,12 @@ class App:
                 return "i 安装/升级 · d 下载 .deb · ↑↓ 滚动 · q 返回列表"
             return "r 卸载 · u 升级 · d 下载 .deb · ↑↓ 滚动 · q 返回列表"
         if self.view == _CLEAN:
-            return ("Enter 删除 · 空格 标记 · x 删标记 · t 切回收站 · / 过滤 · "
+            return ("Enter 删除 · 空格 标记 · x 删标记 · T 切回收站 · / 过滤 · "
                     "Tab 换视图 · ? 帮助 · q 退出")
-        return ("Enter 详情 · r 卸载 · u 升级 · d 下载 · / 过滤 · s 含系统 · "
-                "R 重采 · Tab 换视图 · ? 帮助 · q 退出")
+        if self.view in (_LIST, _LOCAL, _UPGRADABLE, _LOOSE):
+            return ("Enter 详情 · r 卸载 · u 升级 · d 下载 · / 搜索 · t 类型 · "
+                    "s 含系统 · R 重采 · Tab 换视图 · ? 帮助 · q 退出")
+        return ("Enter 详情 · / 搜索 · d 下载 · R 重采 · Tab 换视图 · ? 帮助 · q 退出")
 
     # ---------- 详情 ----------
 
@@ -562,10 +612,14 @@ def _main(std, cfg, inv):
         if kind == "char" and val == "R":
             app.reload(scr)
             continue
-        if kind == "char" and val == "t" and app.view == _CLEAN:
+        if kind == "char" and val == "T" and app.view == _CLEAN:
             app.trash = not app.trash
             app.msg = ("删除方式：移入回收站（可还原）" if app.trash
                        else "删除方式：真删")
+            continue
+        if kind == "char" and val == "t" and app.view in (_LIST, _LOCAL,
+                                                          _UPGRADABLE, _LOOSE):
+            app.cycle_type()
             continue
         if app.view == _CLEAN and kind == "char" and val == " ":
             it = app.current()

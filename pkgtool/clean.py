@@ -24,16 +24,10 @@ from urllib.parse import quote
 from .apt import actions
 from .base import delete_paths, file_size_mb, is_safe_name, is_under_home
 from .config import CFG
-from .labels import loose_state
+from .labels import loose_state, size_text
 
 KINDS = ("loose", "apt-cache", "snap-rev", "flatpak-unused", "pip-cache",
          "conda-cache")
-
-
-def size_text(mb, known=True):
-    if not known:
-        return "未知"
-    return f"{mb / 1024:.2f} GB" if mb >= 1024 else f"{mb:.1f} MB"
 
 
 @dataclass
@@ -68,7 +62,7 @@ def _loose(inv, cfg):
             continue
         out.append(Target(
             kind="loose", label=f"{r.name} {r.version}", detail=path,
-            size_mb=r.extra.get("size_mb") or file_size_mb(path),
+            size_mb=r.size_mb or file_size_mb(path),
             paths=[path], privileged=not is_under_home(path, cfg),
             note=loose_state(r)))
     return out

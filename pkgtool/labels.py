@@ -105,6 +105,24 @@ def loose_state(rec):
     return LOOSE_STATE_LABEL.get(rec.extra.get("state", ""), rec.extra.get("state", ""))
 
 
+def size_text(mb, known=True):
+    """体积文案的唯一实现（clean / report / tui 都走这里）。"""
+    if not known:
+        return "未知"
+    if mb <= 0:
+        return "0"
+    if mb >= 1024:
+        return f"{mb / 1024:.2f} GB"
+    return f"{mb:.1f} MB" if mb >= 1 else f"{mb * 1024:.0f} KB"
+
+
+def size_pair_text(rec):
+    """列表里的体积列：有独占依赖时显示「合计（自身+独占）」。"""
+    if rec.exclusive_deps:
+        return f"{size_text(rec.total_size_mb)} ({len(rec.exclusive_deps)})"
+    return size_text(rec.size_mb)
+
+
 def clean_label(kind, label=""):
     """磁盘回收条目的标题：类别文案 + 条目细节（细节为空时只显示类别）。"""
     head = CLEAN_KIND_LABEL.get(kind, kind)
