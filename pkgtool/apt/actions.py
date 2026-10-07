@@ -66,27 +66,53 @@ def privileged_argv(argv, password=None):
     return ["sudo", *argv]
 
 
-def _kill(p):
-    """终止整个进程组：apt/dpkg 会 fork 出 dpkg、脚本等子进程。"""
+def _kill(p, own_session):
+    """中止子进程。
+    own_session=True 时子进程自成一个会话，可以 killpg 干净地带走整棵树；
+    False 时它和我们同组，killpg 会把自己一起杀掉，只能 terminate 它本身
+    （apt-get 收到 SIGTERM 会自行收拾 dpkg）。"""
     try:
-        os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+        if own_session:
+            os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+        else:
+            p.terminate()
         p.wait(timeout=5)
     except (OSError, subprocess.SubprocessError):
         try:
-            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+            if own_session:
+                os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+            else:
+                p.kill()
         except OSError:
             pass
 
 
+def _error_summary(rc, lines):
+    """失败原因：取输出的最后一行非空内容。
+    只报"退出码 1"等于没报——sudo 认证失败、apt 依赖冲突这些真正的原因
+    都在输出里，用户看到的却是一个光秃秃的数字。"""
+    for line in reversed(lines):
+        line = line.strip()
+        if line:
+            return f"{line[:200]}（退出码 {rc}）"
+    return f"退出码 {rc}"
+
+
 def run_privileged(argv, password=None, timeout=None, on_line=None, cfg=CFG):
-    """执行特权命令并逐行回显。Ctrl-C 中止整个进程组（替代原 UI 的 cancel 接口）。"""
+    """执行特权命令并逐行回显。Ctrl-C 中止（替代原 Web UI 的 cancel 接口）。
+
+    只有"密码经 stdin 喂进去"这种非交互场景才新建会话（那样能 killpg 整棵树）。
+    交互式必须留在当前会话里：start_new_session 会 setsid() 切断控制终端，
+    sudo 就再也打不开 /dev/tty 读密码，直接报
+    "A terminal is required to authenticate"——密码提示根本出不来。"""
     cmd = privileged_argv(argv, password)
     shown = list(argv) if is_root() else ["sudo", *argv]   # 可复现命令，永不含密码
+    own_session = bool(password)
     lines = []
     try:
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE if password else None,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             text=True, start_new_session=True)
+                             text=True, start_new_session=own_session)
     except OSError as e:
         return Result(ok=False, returncode=-1, error=f"{type(e).__name__}: {e}",
                       command=shown)
@@ -104,20 +130,21 @@ def run_privileged(argv, password=None, timeout=None, on_line=None, cfg=CFG):
                 on_line(line)
         rc = p.wait(timeout=timeout)
     except KeyboardInterrupt:
-        _kill(p)
+        _kill(p, own_session)
         return Result(ok=False, returncode=-2, output="\n".join(lines),
                       error="已中止（Ctrl-C）", command=shown)
     except subprocess.TimeoutExpired:
-        _kill(p)
+        _kill(p, own_session)
         return Result(ok=False, returncode=-3, output="\n".join(lines),
                       error=f"超时（{timeout}s）", command=shown)
     except OSError as e:
-        _kill(p)
+        _kill(p, own_session)
         return Result(ok=False, returncode=-1, output="\n".join(lines),
                       error=f"{type(e).__name__}: {e}", command=shown)
     return Result(ok=rc == 0, returncode=rc,
                   output="\n".join(lines)[-cfg.output_tail_chars:],
-                  error="" if rc == 0 else f"退出码 {rc}", command=shown)
+                  error="" if rc == 0 else _error_summary(rc, lines),
+                  command=shown)
 
 
 def run_plain(argv, cwd=None, timeout=None, cfg=CFG):
