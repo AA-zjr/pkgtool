@@ -128,6 +128,10 @@ def select(inv, pkg_type=None, query=None, only_local=False, show_system=False,
     """按条件筛选记录。全项目唯一的过滤实现——原先 Web UI 的 visible()、
     pkg_inventory.py 和 deb_inventory.py 各写了一份，规则还不完全一致。"""
     q = (query or "").lower().strip()
+    # 可升级与"是否系统组件"是两个正交维度：只列可升级项时不再隐藏系统包，
+    # 否则 base-files / libc6 这些最该升级的反而看不见（apt list --upgradable 也全列）。
+    # 规则放在这里，CLI 与交互界面才会给出同一份结果。
+    hide_system = not show_system and not only_upgradable
     out = []
     for rec in inv.records:
         if pkg_type and pkg_type != "all":
@@ -137,7 +141,7 @@ def select(inv, pkg_type=None, query=None, only_local=False, show_system=False,
                 continue
         if loose is not None and rec.is_loose_file != loose:
             continue
-        if not show_system and classify.is_system_component(rec):
+        if hide_system and classify.is_system_component(rec):
             continue
         if only_local and not classify.is_user_installed(rec):
             continue

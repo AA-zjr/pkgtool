@@ -9,7 +9,7 @@
 import argparse
 import sys
 
-from . import clean, inventory, labels, report, tui
+from . import clean, inventory, labels, report, tui, upgrade
 from .apt import actions, lists
 from .backends import pip as pip_backend
 from .config import CFG
@@ -165,9 +165,7 @@ def cmd_download(args):
 def cmd_upgrade(args):
     if args.all:
         _err("升级全部（apt-get upgrade）…")
-        res = actions.run_privileged(["apt-get", "upgrade", "-y"],
-                                     timeout=CFG.timeout_upgrade,
-                                     on_line=print, cfg=CFG)
+        res = upgrade.system_wide(on_line=print, cfg=CFG)
         return 0 if res.ok else _fail(res)
     if not args.names:
         inv = _collect(args)
@@ -194,25 +192,12 @@ def cmd_upgrade(args):
 
 
 def _upgrade_one(rec):
-    """按包格式分派升级方式（原 Web UI 里是三个互不复用的接口）。
-    返回 None 表示该格式没有系统级更新通道，只打印建议、不算失败。"""
-    t, n = rec.pkg_type, rec.name
-    if t == "deb":
-        return actions.upgrade(n, rec.candidate or "", on_line=print, cfg=CFG)
-    if t == "snap":
-        return actions.run_privileged(["snap", "refresh", n],
-                                      timeout=CFG.timeout_upgrade,
-                                      on_line=print, cfg=CFG)
-    if t.startswith("flatpak"):
-        user = rec.extra.get("installation") == "user"
-        argv = ["flatpak", "update", "-y"] + (["--user"] if user else []) + [n]
-        if user:                      # 用户级安装不需要 root
-            return actions.run_plain(argv, timeout=CFG.timeout_upgrade, cfg=CFG)
-        return actions.run_privileged(argv, timeout=CFG.timeout_upgrade,
-                                      on_line=print, cfg=CFG)
-    # pip / appimage / 散落文件：pip 包属于某个具体环境，用当前解释器去升级会装错地方
-    print(labels.update_advice(rec))
-    return None
+    """升级一条记录。分派逻辑在 upgrade 模块，与交互界面共用一份。
+    无系统级更新通道（pip / AppImage / 散落文件）时只打印建议、不算失败。"""
+    if upgrade.plan(rec) is None:
+        print(labels.update_advice(rec))
+        return None
+    return upgrade.run(rec, on_line=print, cfg=CFG)
 
 
 def _fail(res):
@@ -321,9 +306,11 @@ def cmd_config(args):
 def build_parser():
     ap = argparse.ArgumentParser(
         prog="pkgtool",
-        description="本地软件包盘点与管理（deb 为主线，兼探 snap/flatpak/appimage/pip）",
+        description="本地软件包盘点与管理（deb 为主线，兼探 snap/flatpak/appimage/pip）。"
+                    "不带子命令直接运行会进入交互界面。",
         epilog="路径与阈值可用环境变量覆盖，见 `pkgtool config`。")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    # required=False：裸跑 pkgtool 时 args.cmd 为 None，由 main() 转入交互界面
+    sub = ap.add_subparsers(dest="cmd", required=False)
 
     def add_filters(p):
         p.add_argument("-t", "--type", choices=_TYPES + ("all",), default="all",
@@ -333,7 +320,9 @@ def build_parser():
         p.add_argument("--all", action="store_true",
                        help="连系统预装与 apt 自动依赖一起显示（默认隐藏）")
         p.add_argument("--removable", action="store_true", help="只看判定为“用户软件”、允许卸载的")
-        p.add_argument("--upgradable", action="store_true", help="只看有新版本可升级的")
+        p.add_argument("--upgradable", action="store_true",
+                       help="只看有新版本可升级的（隐含显示系统组件：可升级与"
+                            "是否系统包是两个维度，否则 base-files/libc6 会被藏掉）")
         p.add_argument("--loose", action="store_true", help="只看磁盘上散落的包文件")
         p.add_argument("--env", default="", help="只看某个 Python 环境（见 `pkgtool envs`）")
         p.add_argument("--check-updates", action="store_true",
@@ -417,8 +406,25 @@ def build_parser():
     return ap
 
 
+def run_tui():
+    """裸跑 pkgtool → 交互主界面。非 tty 环境降级为提示可用子命令。"""
+    from . import app                      # 延迟导入：子命令路径不需要 curses
+    rc = app.run(CFG)
+    if rc is not None:
+        return rc
+    _err("当前不是交互终端，进不了交互界面。可直接用子命令：")
+    _err("  pkgtool list -t deb --local     你自己装的 deb")
+    _err("  pkgtool list --upgradable       可升级的包")
+    _err("  pkgtool clean --list            可回收的磁盘空间")
+    _err("  pkgtool summary                 汇总统计")
+    _err("完整子命令见 pkgtool --help")
+    return 1
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if not getattr(args, "cmd", None):
+        return run_tui()
     try:
         return args.func(args) or 0
     except KeyboardInterrupt:
