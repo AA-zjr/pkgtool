@@ -6,6 +6,12 @@ build-backend = "setuptools.build_meta"
 name = "pkg-tool"
 dynamic = ["version"]
 description = "Debian 系本地软件包盘点与管理工具（零第三方依赖）"
+license = "GPL-3.0-only"
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+]
 requires-python = ">=3.10"
 dependencies = []
 
