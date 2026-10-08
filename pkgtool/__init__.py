@@ -14,6 +14,8 @@
   for rec in inventory.select(inv, only_local=True):
       print(rec.name, rec.version)
 """
+__version__ = "2.1.0"
+
 from .base import (CSV_HEADER, Backend, Channel, OriginKind, PackageRecord,
                    PkgClass, is_safe_name)
 from .backends import BACKENDS, available_backends, discover

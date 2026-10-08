@@ -158,13 +158,16 @@ def _apt_dry_run(name, autoremove, cfg):
     （npm 依赖它，npm 整棵自动安装树随之孤立），用户会在错误的计划上确认。
 
     用 remove -s 而不是 purge -s：purge 的模拟输出是本地化文本，Remv 行不稳定；
-    两者算出的移除集合一致，真正执行时才用 purge。"""
+    两者算出的移除集合一致，真正执行时才用 purge。
+    固定 LC_ALL=C：Remv 行是解析目标，deepin 等发行版的 apt 带本地化补丁，
+    zh_CN 环境下不能赌它不翻译。"""
     argv = ["apt-get", "remove", "-s"]
     if autoremove:
         argv.append("--autoremove")
     try:
         p = subprocess.run(argv + [name], capture_output=True, text=True,
-                           timeout=cfg.timeout_dry_run)
+                           timeout=cfg.timeout_dry_run,
+                           env=dict(os.environ, LC_ALL="C", LANG="C"))
     except (OSError, subprocess.SubprocessError) as e:
         return [], f"{type(e).__name__}: {e}"
     will = [ln.split()[1].split(":")[0] for ln in p.stdout.splitlines()
