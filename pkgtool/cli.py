@@ -163,15 +163,16 @@ def cmd_install(args):
         if not item.remote:
             _err("请用 --remote 指定从哪个 remote 安装，本机有：" + ", ".join(remotes))
             return 2
-    argv, err = catalog.install_argv(item, args.version)
+    argv, err = catalog.install_argv(item, args.version, args.user)
     if argv is None:
         _err(err)
         return 2
-    _err("将执行: sudo " + " ".join(argv))
+    _err(("将执行: " if args.user else "将执行: sudo ") + " ".join(argv))
     if not args.yes and not _confirm("确认安装?"):
         _err("已取消")
         return 1
-    res = catalog.install(item, version=args.version, on_line=print, cfg=CFG)
+    res = catalog.install(item, version=args.version, user=args.user,
+                          on_line=print, cfg=CFG)
     if res.ok:
         print(f"✓ 安装完成 {args.name}")
         return 0
@@ -414,6 +415,8 @@ def build_parser():
     p.add_argument("--classic", action="store_true",
                    help="snap 经典 confinement（搜索时会自动识别，手动装才需要）")
     p.add_argument("--remote", default="", help="flatpak 的 remote 名（默认 flathub）")
+    p.add_argument("--user", action="store_true",
+                   help="flatpak 装到用户级（~/.local/share/flatpak），不需要 root")
     p.add_argument("-y", "--yes", action="store_true", help="跳过确认")
     p.set_defaults(func=cmd_install)
 

@@ -20,7 +20,9 @@ import subprocess
 from ..base import Backend, OriginKind, PackageRecord, file_size_mb
 from ..config import CFG
 
-_APP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-]*\.[A-Za-z0-9\-]+$")
+# app-id 允许下划线：app.zen_browser.zen 这类很常见，漏掉它会让这些应用
+# 的更新检测被静默跳过（正则不匹配就当成非法行丢弃）
+_APP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]*\.[A-Za-z0-9_\-]+$")
 _COLUMNS = "application,version,name,arch,branch,installation,origin"
 
 
@@ -55,19 +57,23 @@ def _parse_metadata(path):
 
 
 def check_updates(cfg=CFG, timeout=90):
-    """flathub 有新版的应用 → {app_id: 显示名}。
-    需要联网（约 2 秒），所以默认不调用，由 CLI 的 --check-updates 显式触发。"""
-    try:
-        p = subprocess.run(["flatpak", "remote-ls", "--updates",
-                            "--columns=name,application"],
-                           capture_output=True, text=True, timeout=timeout)
-    except (OSError, subprocess.SubprocessError):
-        return {}
+    """有新版的 flatpak 应用 → {app_id: 显示名}。
+    需要联网（每个 installation 约 2 秒），所以默认不调用，由 --check-updates 触发。
+
+    两个 installation 都要查：不带作用域时 flatpak 只看默认（系统）安装，
+    用户级装的应用有新版会被整个漏掉。"""
     out = {}
-    for line in p.stdout.splitlines():
-        cols = [c.strip() for c in line.split("\t")]
-        if len(cols) >= 2 and _APP_ID_RE.match(cols[1]):
-            out[cols[1]] = cols[0]
+    for scope in ("--system", "--user"):
+        try:
+            p = subprocess.run(["flatpak", "remote-ls", "--updates", scope,
+                                "--columns=name,application"],
+                               capture_output=True, text=True, timeout=timeout)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        for line in p.stdout.splitlines():
+            cols = [c.strip() for c in line.split("\t")]
+            if len(cols) >= 2 and _APP_ID_RE.match(cols[1]):
+                out[cols[1]] = cols[0]
     return out
 
 

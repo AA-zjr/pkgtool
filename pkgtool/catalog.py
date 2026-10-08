@@ -23,7 +23,7 @@ import time
 from dataclasses import dataclass, field
 
 from .apt import actions, lists
-from .base import is_safe_name
+from .base import is_safe_name, matches_tokens, query_tokens
 from .config import CFG
 
 SOURCES = ("apt", "snap", "flatpak")
@@ -115,41 +115,77 @@ def _search_snap(q, limit, cfg):
     return out[:limit]
 
 
-def flatpak_remotes(cfg):
-    """已配置的 flatpak remote 名（install 时需要指明从哪个 remote 装）。"""
-    return [l.split("\t")[0].strip()
-            for l in _run(["flatpak", "remotes", "--columns=name"], cfg)
-            if l.strip()]
+def flatpak_remote_urls(cfg=CFG, user=False):
+    """→ {remote 名: url}。user=True 查用户级安装。
+    系统级配的 remote 对 --user 安装不可见，这两套是各自独立的配置。"""
+    scope = "--user" if user else "--system"
+    out = {}
+    for line in _run(["flatpak", "remotes", scope, "--columns=name,url"], cfg):
+        f = line.split("\t")
+        if len(f) >= 2 and f[0].strip():
+            out[f[0].strip()] = f[1].strip()
+    return out
+
+
+def flatpak_remotes(cfg=CFG):
+    return list(flatpak_remote_urls(cfg))
+
+
+def flatpak_user_missing_remote(remote, cfg=CFG):
+    """--user 安装前检查该 remote 在用户级是否存在；缺失时返回可直接执行的修复命令。
+    系统级与用户级是两套独立的 remote 配置，只配了系统级时 --user 会报
+    "未发现用于 xxx 的远程引用"，那句报错看不出该怎么修。"""
+    if remote in flatpak_remote_urls(cfg, user=True):
+        return ""
+    head = f"用户级 flatpak 安装里没有 “{remote}”（系统级配的 remote 对 --user 不可见）。"
+    url = flatpak_remote_urls(cfg).get(remote, "")
+    if not url:
+        return head + f" 系统级也没配，无法推断 URL，请手动 flatpak remote-add --user {remote} <url>"
+    # ostree 约定：<repo 根>/<remote 名>.flatpakrepo，不把 flathub 地址写死在代码里
+    ref = url.rstrip("/") + f"/{remote}.flatpakrepo"
+    return f"{head}\n    先执行：flatpak remote-add --user {remote} {ref}"
 
 
 def _flatpak_catalog(cfg):
-    """全部 remote 的应用清单（缓存）。→ [CatalogItem]"""
+    """全部 remote 的应用清单（缓存）。→ [CatalogItem]
+
+    必须逐个 installation 显式指定 --system / --user：同一个 remote 名
+    （flathub）常常两个 installation 都配了，这时不带作用域的
+    `flatpak remote-ls flathub` 会直接报 "Remote 'flathub' found in
+    multiple installations" 并返回空，整个 flatpak 搜索就静默失效了。
+    两个作用域都扫，按 app-id 去重（系统级优先，因为它是默认安装目标）。"""
     now = time.time()
     with _LOCK:
         if _FLATPAK_CACHE["items"] is not None \
                 and now - _FLATPAK_CACHE["t"] < cfg.catalog_cache_ttl:
             return _FLATPAK_CACHE["items"]
-    out = []
-    for remote in flatpak_remotes(cfg):
-        for line in _run(["flatpak", "remote-ls", "--app",
-                          f"--columns={_FLATPAK_COLUMNS}", remote], cfg):
-            f = line.split("\t")
-            if len(f) < 4 or not f[1]:
-                continue
-            # flatpak 的体积列用不间断空格分隔（"518.3\xa0MB"），不换成普通
-            # 空格会打乱终端对齐、也没法当普通字符串比较
-            size = f[2].replace("\xa0", " ").strip()
-            out.append(CatalogItem(source="flatpak", name=f[1], display=f[0],
-                                   size_text=size, channel=f[3].strip(),
-                                   publisher=remote, remote=remote))
+    out, seen = [], set()
+    for scope, is_user in (("--system", False), ("--user", True)):
+        for remote in flatpak_remote_urls(cfg, user=is_user):
+            for line in _run(["flatpak", "remote-ls", "--app", scope,
+                              f"--columns={_FLATPAK_COLUMNS}", remote], cfg):
+                f = line.split("\t")
+                if len(f) < 4 or not f[1] or f[1] in seen:
+                    continue
+                seen.add(f[1])
+                # flatpak 的体积列用不间断空格分隔（"518.3\xa0MB"），不换成
+                # 普通空格会打乱终端对齐、也没法当普通字符串比较
+                out.append(CatalogItem(source="flatpak", name=f[1], display=f[0],
+                                       size_text=f[2].replace("\xa0", " ").strip(),
+                                       channel=f[3].strip(), publisher=remote,
+                                       remote=remote,
+                                       extra={"scope": "user" if is_user else "system"}))
     with _LOCK:
         _FLATPAK_CACHE.update(t=now, items=out)
     return out
 
 
 def _rank(items, q, limit):
-    """本地过滤 + 排名：完全匹配 > 前缀 > 名字含 > app-id 含。"""
+    """本地过滤 + 排名：完全匹配 > 前缀 > 子串 > 分词全命中。
+    最后一级用分词，这样 "zen browser" 才搜得到 app.zen_browser.zen ——
+    整串子串匹配对不上（名字里是下划线，查询里是空格）。"""
     ql = q.lower()
+    tokens = query_tokens(q)
     hits = []
     for it in items:
         n, d = it.name.lower(), it.display.lower()
@@ -159,6 +195,8 @@ def _rank(items, q, limit):
             r = 1
         elif ql in n or ql in d:
             r = 2
+        elif matches_tokens(f"{it.name} {it.display}", tokens):
+            r = 3
         else:
             continue
         hits.append((r, it.display or it.name, it))
@@ -242,8 +280,9 @@ def installed_names(cfg=CFG, sources=SOURCES):
 # ---------- 安装 ----------
 
 
-def install_argv(item, version=""):
-    """→ (argv, privileged)。名称先过白名单，拒绝参数注入。"""
+def install_argv(item, version="", user=False):
+    """→ (argv, privileged)；名称非法时返回 (None, 错误信息)。
+    user=True 只对 flatpak 有意义：装到 ~/.local/share/flatpak，不需要 root。"""
     if not is_safe_name(item.name):
         return None, f"名称非法，拒绝安装：{item.name!r}"
     if item.source == "apt":
@@ -257,18 +296,24 @@ def install_argv(item, version=""):
             argv.append("--classic")   # 经典 confinement 不带这个标志会直接失败
         return argv + [item.name], True
     if item.source == "flatpak":
-        argv = ["flatpak", "install", "-y"]
+        # 作用域必须显式给：remote 同名存在于两个 installation 时，
+        # 不带 --system/--user 的 flatpak 命令会报 multiple installations
+        argv = ["flatpak", "install", "-y", "--user" if user else "--system"]
         if item.remote and is_safe_name(item.remote):
             argv.append(item.remote)
-        return argv + [item.name], True
+        return argv + [item.name], not user
     return None, f"不支持安装的来源：{item.source}"
 
 
-def install(item, version="", on_line=None, cfg=CFG):
+def install(item, version="", user=False, on_line=None, cfg=CFG):
     """安装一条目录项 → actions.Result。"""
-    argv, privileged = install_argv(item, version)
+    argv, privileged = install_argv(item, version, user)
     if argv is None:
         return actions.Result(ok=False, error=privileged)   # 此时第二项是错误信息
+    if item.source == "flatpak" and user and item.remote:
+        missing = flatpak_user_missing_remote(item.remote, cfg)
+        if missing:
+            return actions.Result(ok=False, error=missing, command=argv)
     if privileged:
         return actions.run_privileged(argv, timeout=cfg.timeout_upgrade,
                                       on_line=on_line, cfg=cfg)

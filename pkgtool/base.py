@@ -22,8 +22,10 @@ from enum import Enum
 
 from .config import CFG
 
-# 包名 / 版本 / flatpak app-id 的白名单。允许 epoch 的冒号和 Debian 版本的 ~ +。
-_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.:+\-~]{0,199}$")
+# 包名 / 版本 / flatpak app-id 的白名单。允许 epoch 的冒号、Debian 版本的 ~ +，
+# 以及下划线——flatpak 的 app-id 规范允许 [A-Za-z0-9._-]，实际大量存在
+# （app.zen_browser.zen），漏掉下划线会导致这些应用根本装不了。
+_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.:+_\-~]{0,199}$")
 
 
 def is_safe_name(value):
@@ -34,6 +36,24 @@ def is_safe_name(value):
 
 
 BYTES_PER_MB = 1048576
+
+# 搜索时当成词分隔符的字符：空白 + app.zen_browser.zen 里的 . 和 _
+_QUERY_SPLIT_RE = re.compile(r"[\s._\-/+:]+")
+
+
+def query_tokens(q):
+    """把查询串拆成小写 token：空白与 . _ - / + : 都算分隔符。
+    整串子串匹配搜不到 "zen browser"→app.zen_browser.zen（一边是空格、
+    一边是下划线），拆词后两边归一到同一形态才能对上。"""
+    return [t for t in _QUERY_SPLIT_RE.split((q or "").lower()) if t]
+
+
+def matches_tokens(haystack, tokens):
+    """全部 token 都出现才算命中（AND 语义）。haystack 同样先做分隔符归一。"""
+    if not tokens:
+        return False
+    h = " " + _QUERY_SPLIT_RE.sub(" ", (haystack or "").lower()) + " "
+    return all(t in h for t in tokens)
 
 
 def file_size_mb(path):

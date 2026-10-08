@@ -22,6 +22,7 @@ from dataclasses import asdict, dataclass
 from email.utils import parsedate_to_datetime
 from functools import cmp_to_key
 
+from ..base import matches_tokens, query_tokens
 from ..compress import is_compressed, open_text, read_text, strip_compressed_suffix
 from ..config import CFG
 from .version import newest, ver_cmp, ver_gt
@@ -228,11 +229,14 @@ class RepoIndex:
 
     def search(self, q, limit=30):
         """按包名/描述搜索。
-        排名：完全匹配 > 前缀 > 名字含 > 描述含。先全量扫描再排序——原实现边扫边在
-        limit*3 处 break，结果取决于 dict 插入顺序，会漏掉更优匹配。"""
+        排名：完全匹配 > 前缀 > 名字含 > 描述含 > 分词全命中。最后一级用分词，
+        让 "zen browser" 这类多词查询也能命中名字里用下划线/连字符的包。
+        先全量扫描再排序——原实现边扫边在 limit*3 处 break，结果取决于 dict
+        插入顺序，会漏掉更优匹配。"""
         q = (q or "").lower().strip()
         if not q:
             return []
+        tokens = query_tokens(q)
         hits = []
         for name in self._entries:
             nl = name.lower()
@@ -246,6 +250,8 @@ class RepoIndex:
                 rank = 2
             elif q in desc:
                 rank = 3
+            elif matches_tokens(f"{name} {desc}", tokens):
+                rank = 4
             else:
                 continue
             hits.append((rank, name))
