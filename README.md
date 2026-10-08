@@ -46,24 +46,35 @@ pkgtool config                查看当前配置
 已知限制：玲珑只做了盘点/启动/卸载/升级，没接商店搜索；散落 AppImage
 靠文件嗅探识别（不执行目标文件），可能漏报。
 
-## 反馈
+## 项目结构
 
-提 issue 必须包含以下三项，缺一可能直接关闭：
+```
+pkgtool/
+  config.py        路径与阈值的唯一来源（PKGTOOL_* 环境变量在此覆盖）
+  base.py          统一数据模型 PackageRecord 与后端契约 Backend
+  compress.py      压缩日志文件的统一读取（gz/xz/bz2）
+  labels.py        枚举 code → 中文文案的唯一来源
+  apt/             deb 数据源：apt 索引解析、dpkg 状态、安装日志、
+                   依赖图、Debian 版本比较、特权执行入口
+  backends/        各格式采集器：deb / snap / flatpak / linyap / appimage
+  classify.py      卸载风险分类（只有"软件"允许删）与显示层级
+  inventory.py     采集编排：跑后端 → 分类 → 去重，唯一数据入口
+  remove.py        卸载：dry-run 预览产出 Plan，执行照单进行
+  clean.py         磁盘回收：散落文件 / 各类缓存 / 未引用运行时
+  upgrade.py       跨格式升级分派
+  launch.py        应用启动（各格式收敛在一个模块）
+  catalog.py       apt / Snap Store / flathub 三源搜索与安装
+  report.py        输出层：表格 / CSV / JSON / 详情
+  cli.py           命令行入口与子命令定义
+  app.py / tui.py  交互界面与 curses 底座
+scripts/
+  build_pyz.py     打单文件发行版 dist/*.pyz
+```
 
-1. 系统及版本号（发行版 + 版本）
-2. 包管理器版本（`apt-get --version`、`snap version`、`flatpak --version`、
-   `ll-cli --version`，装了哪个贴哪个）
-3. 问题的描述与复现步骤；**有截图或终端输出更好**
+## 反馈与贡献
 
-## 贡献
-
-PR 要求：
-
-- 只改与问题直接相关的代码。顺手格式化、重命名变量、调整无关结构的
-  改动会被拒绝
-- **界面不接受 PR**：TUI 的视图、按键、显示逻辑不开放修改
-- 能带上测试更好（`tests/`，标准库 unittest，跑法
-  `python3 -m unittest discover -s tests`）
+见 [CONTRIBUTING.md](CONTRIBUTING.md)——提 issue 必须带系统版本、
+包管理器版本和问题描述；PR 不接受无意义改动和界面改动。
 
 ## 许可
 
