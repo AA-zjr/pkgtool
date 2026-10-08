@@ -23,7 +23,7 @@ from email.utils import parsedate_to_datetime
 from functools import cmp_to_key
 
 from ..base import matches_tokens, query_tokens
-from ..compress import is_compressed, open_text, read_text, strip_compressed_suffix
+from ..compress import open_text, read_text, strip_compressed_suffix
 from ..config import CFG
 from .version import newest, ver_cmp, ver_gt
 

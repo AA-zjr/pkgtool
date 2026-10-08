@@ -12,7 +12,6 @@ PKG_TYPE_LABEL = {
     "flatpak": "flatpak（应用）",
     "flatpak-runtime": "flatpak（运行库）",
     "appimage": "AppImage（便携）",
-    "pip": "pip（Python 环境）",
 }
 
 CHANNEL_LABEL = {
@@ -180,10 +179,6 @@ def update_advice(rec):
     if t.startswith("flatpak"):
         scope = "--user " if rec.extra.get("installation") == "user" else ""
         return f"flathub 推送；手动：flatpak update {scope}{n}"
-    if t == "pip":
-        env = rec.extra.get("env", "")
-        return (f"Python 环境内更新：pip install -U {n}"
-                + (f"（env: {env}）" if env else ""))
     if t == "deb":
         if rec.upgradable:
             return (f"apt 源管理，可升级 {rec.version} → {rec.candidate}："

@@ -98,23 +98,17 @@ class Config:
         ".local/share/venv",
     )
 
-    # ---- Python 环境探测 ----
-    conda_dir_names: tuple = ("miniconda3", "anaconda3", "miniforge3")
-    conda_scan_roots: tuple = ("/opt",)
-    python_scan_maxdepth: int = 4    # 找 conda-meta / pyvenv.cfg 的最大深度
-    python_system_root: str = "/usr/local"
-    # 注意：与 prune_dirs 不同——这里不能剪掉 .venv/.local，那正是要找的目标
-    pip_prune_dirs: frozenset = frozenset(
-        {".cache", "node_modules", "__pycache__", ".npm", ".bun", ".rustup"})
-
     # ---- 磁盘回收（clean 子命令）----
+    # 以下 conda_* 只用于定位「包缓存目录」的位置（<conda 根>/pkgs），
+    # 不做任何环境探测或环境管理——那部分已按需求整体移除。
     pip_cache_dir: str = ".cache/pip"   # 相对 home，纯缓存，删了只会重新下载
     conda_pkgs_subdir: str = "pkgs"     # <conda 发行版根>/pkgs 是包缓存
+    conda_dir_names: tuple = ("miniconda3", "anaconda3", "miniforge3")
+    conda_cache_scan_roots: tuple = ("/opt", "/usr/local")   # 与 home 一起找 conda 根
 
     # ---- 判定阈值 ----
     birth_margin_hours: int = 24     # 日志最早事件 + 此窗口内安装 = 镜像自带
     index_cache_ttl: float = 300.0   # apt 索引解析缓存（apt update 后自动失效）
-    env_cache_ttl: float = 60.0      # Python 环境探测缓存
 
     # ---- 远程目录搜索（catalog）----
     timeout_catalog: int = 30        # snap find / flatpak remote-ls 的超时
@@ -130,7 +124,6 @@ class Config:
 
     # ---- 输出 ----
     output_tail_chars: int = 2000    # 回显命令输出时保留的尾部字符数
-    exec_list_limit: int = 6         # pip 记录里最多列几个命令
     top_dirs_limit: int = 4          # install_path 里最多列几个顶层目录
 
     @classmethod
@@ -186,9 +179,16 @@ class Config:
         return [os.path.join(user_home(), d) for d in self.residue_home_dirs]
 
     @property
-    def python_scan_roots(self):
-        """找 conda-meta / pyvenv.cfg 的扫描根：主目录 + 系统目录。"""
-        return (user_home(),) + tuple(self.conda_scan_roots)
+    def conda_roots(self):
+        """conda 发行版根目录 → 只为定位包缓存 <根>/pkgs 而存在。
+        conda-meta 目录存在才算真根，避免把同名普通目录误当成发行版。"""
+        out = []
+        for base in (user_home(),) + tuple(self.conda_cache_scan_roots):
+            for name in self.conda_dir_names:
+                p = os.path.join(base, name)
+                if os.path.isdir(os.path.join(p, "conda-meta")):
+                    out.append(p)
+        return out
 
     @property
     def pip_cache_path(self):

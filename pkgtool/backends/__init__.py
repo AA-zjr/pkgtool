@@ -1,17 +1,16 @@
 """pkgtool.backends — 各包格式采集器的注册表。
 
 新增一种格式 = 新建 <fmt>.py 实现 Backend 子类 + 在 BACKENDS 里加一行，
-其余模块（inventory / classify / report / cli）都不需要改。
+其余模块（inventory / classify / report / cli / app）都不需要改。
 """
 from ..base import Backend
 from ..config import CFG
 from .appimage import AppImageBackend
 from .deb import DebBackend
 from .flatpak import FlatpakBackend
-from .pip import PipBackend
 from .snap import SnapBackend
 
-BACKENDS = (DebBackend, SnapBackend, FlatpakBackend, AppImageBackend, PipBackend)
+BACKENDS = (DebBackend, SnapBackend, FlatpakBackend, AppImageBackend)
 
 
 def available_backends(cfg=CFG):
@@ -25,5 +24,4 @@ def discover(cfg=CFG):
 
 
 __all__ = ["BACKENDS", "Backend", "available_backends", "discover",
-           "DebBackend", "SnapBackend", "FlatpakBackend", "AppImageBackend",
-           "PipBackend"]
+           "DebBackend", "SnapBackend", "FlatpakBackend", "AppImageBackend"]

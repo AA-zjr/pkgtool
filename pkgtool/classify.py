@@ -50,8 +50,6 @@ def classify(rec, index=None):
         return _flatpak(rec)
     if t == "appimage":
         return PkgClass.APP, "便携应用（用户自行安置）"
-    if t == "pip":
-        return PkgClass.LIBRARY, "pip 包（卸载用 pip uninstall，不走系统包管理）"
     return PkgClass.SYSTEM, f"未知包类型 {t}，保守拒绝"
 
 
@@ -125,8 +123,6 @@ def is_user_installed(rec):
     if t == "deb":
         return (rec.origin_kind is OriginKind.LOCAL
                 or rec.channel in (Channel.DPKG_LOCAL, Channel.APT_LOCAL))
-    if t == "pip":
-        return True                     # pip 包都是用户装进环境的
     if t == "appimage":
         return True                     # 已安置的便携应用（散落文件上面已排除）
     if t.endswith("-runtime"):

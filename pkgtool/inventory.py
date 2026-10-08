@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from . import classify
 from .backends import discover
 from .backends.flatpak import check_updates as flatpak_check_updates
-from .backends.pip import environment_summary
 from .base import PackageRecord
 from .config import CFG
 
@@ -25,7 +24,6 @@ class Inventory:
     by_key: dict = field(default_factory=dict)
     per_type: dict = field(default_factory=dict)
     errors: dict = field(default_factory=dict)      # 后端名 → 错误信息
-    py_envs: list = field(default_factory=list)
     collected_at: str = ""
     elapsed: float = 0.0
 
@@ -43,7 +41,7 @@ class Inventory:
 def collect(cfg=CFG, check_updates=False, on_backend=None, only_types=None):
     """采集全部可用后端 → Inventory。
     check_updates=True 时才联网查 flathub 新版（约 2 秒），默认不查。
-    only_types 给定则只跑这些类型的后端（如只要 deb 时跳过 2.5 秒的 pip 环境扫描）。"""
+    only_types 给定则只跑这些类型的后端（如只要 deb 时跳过 snap/flatpak 的子进程探测）。"""
     t0 = time.time()
     records, per_type, errors = [], {}, {}
     for be in discover(cfg):
@@ -73,7 +71,6 @@ def collect(cfg=CFG, check_updates=False, on_backend=None, only_types=None):
 
     return Inventory(records=sorted(by_key.values(), key=_sort_key),
                      by_key=by_key, per_type=per_type, errors=errors,
-                     py_envs=_py_envs(cfg),
                      collected_at=time.strftime("%Y-%m-%d %H:%M:%S"),
                      elapsed=round(time.time() - t0, 1))
 
@@ -108,15 +105,8 @@ def _fill_flatpak_updates(by_key, cfg):
             rec.extra["update_name"] = updates[rec.name]
 
 
-def _py_envs(cfg):
-    try:
-        return environment_summary(cfg)
-    except Exception:                              # noqa: BLE001
-        return []
-
-
 _TYPE_ORDER = {"deb": 0, "snap": 1, "flatpak": 2, "flatpak-runtime": 3,
-               "appimage": 4, "pip": 5}
+               "appimage": 4}
 
 
 def _sort_key(rec):
@@ -124,7 +114,7 @@ def _sort_key(rec):
 
 
 def select(inv, pkg_type=None, query=None, only_local=False, show_system=False,
-           env=None, only_removable=False, only_upgradable=False, loose=None):
+           only_removable=False, only_upgradable=False, loose=None):
     """按条件筛选记录。全项目唯一的过滤实现——原先 Web UI 的 visible()、
     pkg_inventory.py 和 deb_inventory.py 各写了一份，规则还不完全一致。"""
     q = (query or "").lower().strip()
@@ -148,8 +138,6 @@ def select(inv, pkg_type=None, query=None, only_local=False, show_system=False,
         if only_removable and not classify.is_removable(rec):
             continue
         if only_upgradable and not rec.upgradable:
-            continue
-        if env and rec.extra.get("env") != env:
             continue
         if q and not _matches(rec, q):
             continue

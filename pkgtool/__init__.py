@@ -3,7 +3,7 @@
 分层（依赖自上而下，禁止反向引用）：
   config / compress / base / labels   内核：路径与阈值、压缩读取、数据模型、展示文案
   apt/                                deb 数据源与写操作：索引、日志、dpkg 状态、特权执行
-  backends/                           各包格式采集器（deb/snap/flatpak/appimage/pip）
+  backends/                           各包格式采集器（deb/snap/flatpak/appimage）
   classify / remove                   卸载安全层：分类判定、残留扫描、dry-run 与执行
   inventory                           编排：discover → collect → classify，唯一数据入口
   report / cli                        输出与命令行

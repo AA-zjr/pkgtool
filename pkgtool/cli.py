@@ -11,11 +11,10 @@ import sys
 
 from . import catalog, clean, inventory, labels, report, tui, upgrade
 from .apt import actions, lists
-from .backends import pip as pip_backend
 from .config import CFG
 from .remove import execute, preview
 
-_TYPES = ("deb", "snap", "flatpak", "appimage", "pip")
+_TYPES = ("deb", "snap", "flatpak", "appimage")
 
 
 def _err(msg):
@@ -88,7 +87,7 @@ def cmd_list(args):
     inv = _collect(args)
     recs = inventory.select(inv, pkg_type=args.type, query=args.query,
                             only_local=args.local, show_system=args.all,
-                            env=args.env, only_removable=args.removable,
+                            only_removable=args.removable,
                             only_upgradable=args.upgradable,
                             loose=True if args.loose else None)
     if args.names_only:
@@ -126,16 +125,6 @@ def cmd_info(args):
             _err(f"未找到 {args.name}")
             return 1
     return _write("\n\n".join(report.render_detail(r) for r in matches))
-
-
-def cmd_envs(args):
-    envs = pip_backend.environment_summary(CFG)
-    if not envs:
-        return _write("  （未探测到 Python 环境）")
-    cols = [("环境", lambda e: e["label"], 52, "<"),
-            ("包数", lambda e: str(e["packages"]), 8, ">"),
-            ("备注", lambda e: "空壳（没装 python）" if e.get("empty") else "", 20, "<")]
-    return _write(report.render_table(envs, cols))
 
 
 def cmd_search(args):
@@ -228,7 +217,7 @@ def cmd_upgrade(args):
 
 def _upgrade_one(rec):
     """升级一条记录。分派逻辑在 upgrade 模块，与交互界面共用一份。
-    无系统级更新通道（pip / AppImage / 散落文件）时只打印建议、不算失败。"""
+    无系统级更新通道（AppImage / 散落文件）时只打印建议、不算失败。"""
     if upgrade.plan(rec) is None:
         print(labels.update_advice(rec))
         return None
@@ -341,7 +330,7 @@ def cmd_config(args):
 def build_parser():
     ap = argparse.ArgumentParser(
         prog="pkgtool",
-        description="本地软件包盘点与管理（deb 为主线，兼探 snap/flatpak/appimage/pip）。"
+        description="本地软件包盘点与管理（deb 为主线，兼探 snap/flatpak/appimage）。"
                     "不带子命令直接运行会进入交互界面。",
         epilog="路径与阈值可用环境变量覆盖，见 `pkgtool config`。")
     # required=False：裸跑 pkgtool 时 args.cmd 为 None，由 main() 转入交互界面
@@ -359,7 +348,6 @@ def build_parser():
                        help="只看有新版本可升级的（隐含显示系统组件：可升级与"
                             "是否系统包是两个维度，否则 base-files/libc6 会被藏掉）")
         p.add_argument("--loose", action="store_true", help="只看磁盘上散落的包文件")
-        p.add_argument("--env", default="", help="只看某个 Python 环境（见 `pkgtool envs`）")
         p.add_argument("--check-updates", action="store_true",
                        help="联网查 flathub 新版（约 2 秒；deb 的可升级检测本来就离线）")
         p.add_argument("--quiet", action="store_true", help="不打印采集进度")
@@ -384,9 +372,6 @@ def build_parser():
     p.add_argument("--check-updates", action="store_true")
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_info)
-
-    p = sub.add_parser("envs", help="探测到的 Python 环境与各自包数")
-    p.set_defaults(func=cmd_envs)
 
     p = sub.add_parser("search", help="跨源搜索：apt 本地索引 / Snap Store / flathub")
     p.add_argument("query")

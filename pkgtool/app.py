@@ -1,7 +1,7 @@
 """pkgtool.app — 交互式主界面（裸跑 `pkgtool` 进入）。
 
-七个视图，Tab 或数字键切换：
-  1 全部包  2 本地自装  3 可升级  4 散落包文件  5 磁盘回收  6 apt 搜索  7 Python 环境
+六个视图，Tab 或数字键切换：
+  1 全部包  2 本地自装  3 可升级  4 散落包文件  5 磁盘回收  6 仓库搜索
 
 本文件只有界面与状态机，业务规则一律走既有各层：inventory 取数、classify 判定、
 remove / clean / upgrade / actions 执行、labels / report 出文案。这样交互界面和
@@ -19,16 +19,14 @@ from dataclasses import dataclass
 from . import (catalog, clean, classify, inventory, labels, remove, report,
                tui, upgrade)
 from .apt import actions, lists
-from .backends import pip as pip_backend
 from .config import CFG
 from .report import pad, truncate
 
-VIEWS = ("全部包", "本地自装", "可升级", "散落包文件", "磁盘回收",
-         "仓库搜索", "Python 环境")
-_LIST, _LOCAL, _UPGRADABLE, _LOOSE, _CLEAN, _SEARCH, _ENV = range(len(VIEWS))
+VIEWS = ("全部包", "本地自装", "可升级", "散落包文件", "磁盘回收", "仓库搜索")
+_LIST, _LOCAL, _UPGRADABLE, _LOOSE, _CLEAN, _SEARCH = range(len(VIEWS))
 _SEARCH_LIMIT = 80
 # t 键循环的包类型；flatpak 一项同时覆盖 flatpak 与 flatpak-runtime
-_TYPE_CYCLE = ("all", "deb", "snap", "flatpak", "appimage", "pip")
+_TYPE_CYCLE = ("all", "deb", "snap", "flatpak", "appimage")
 # 仓库搜索视图里 s 键循环的目录来源（见 catalog.py）
 _SOURCE_CYCLE = ("all", "apt", "snap", "flatpak")
 _SOURCE_LABEL = {"all": "全部来源", "apt": "apt 源", "snap": "Snap Store",
@@ -38,9 +36,9 @@ _HELP = """按键一览
 
   浏览
     ↑ ↓ / k j         上下移动          PgUp PgDn   翻页
-    g  G              跳到开头 / 结尾    Tab / 1-7   切换视图
+    g  G              跳到开头 / 结尾    Tab / 1-6   切换视图
     /                 搜索 / 过滤（apt 搜索视图里就是查询词）
-    t                 包类型筛选：全部 → deb → snap → flatpak → appimage → pip
+    t                 包类型筛选：全部 → deb → snap → flatpak → appimage
     s                 显示 / 隐藏系统预装与自动依赖
     R                 重新采集           ?           本帮助
     q 或 Esc          退出（详情里是返回）
@@ -82,7 +80,7 @@ _HELP = """按键一览
 
 @dataclass
 class Item:
-    kind: str                 # pkg / target / repo / env / hint
+    kind: str                 # pkg / target / repo / hint
     head: str
     sub: str
     data: object
@@ -120,7 +118,6 @@ class App:
         self.show_system = False
         self.ptype = "all"             # 包类型筛选，t 键循环
         self.source = "all"            # 仓库搜索的来源筛选，s 键循环
-        self.env = ""
         self.trash = False
         self.items = []
         self.lv = tui.ListView([], _render, per_item=2)
@@ -146,7 +143,7 @@ class App:
 
     def rebuild(self):
         builders = (self._pkgs_all, self._pkgs_local, self._pkgs_upgradable,
-                    self._loose, self._targets, self._repo_search, self._envs)
+                    self._loose, self._targets, self._repo_search)
         self.items = builders[self.view]()
         self.lv.set_items(self.items)
 
@@ -172,8 +169,6 @@ class App:
                         f"{labels.size_text(r.deps_size_mb)}")
         if r.executables:
             bits.append(f"{len(r.executables)} 个可执行")
-        if r.extra.get("env"):
-            bits.append("env " + r.extra["env"])
         if r.upgradable:
             bits.append("→ " + r.candidate)
         color = "warn" if r.is_loose_file else ("ok" if r.upgradable else "norm")
@@ -182,12 +177,12 @@ class App:
     def _pkgs_all(self):
         return [self._pkg_item(r) for r in inventory.select(
             self.inv, show_system=self.show_system, query=self.q,
-            pkg_type=self.ptype, env=self.env or None)]
+            pkg_type=self.ptype)]
 
     def _pkgs_local(self):
         return [self._pkg_item(r) for r in inventory.select(
             self.inv, only_local=True, show_system=self.show_system,
-            query=self.q, pkg_type=self.ptype, env=self.env or None)]
+            query=self.q, pkg_type=self.ptype)]
 
     def _pkgs_upgradable(self):
         return [self._pkg_item(r) for r in inventory.select(
@@ -246,21 +241,10 @@ class App:
                             "ok" if x.installed else "norm"))
         return out
 
-    def _envs(self):
-        out = []
-        for e in pip_backend.environment_summary(self.cfg):
-            empty = e.get("empty")
-            out.append(Item("env",
-                            pad(truncate(e["label"], 50), 52)
-                            + pad(str(e["packages"]), 8),
-                            "空壳（没装 python）" if empty else "Enter 查看该环境里的包",
-                            e, "dim" if empty else "norm"))
-        return out or [Item("hint", "未探测到 Python 环境", "", None, "dim")]
-
     # ---------- 状态变更 ----------
 
     def cycle_type(self):
-        """t 键循环包类型筛选：全部 → deb → snap → flatpak → appimage → pip。
+        """t 键循环包类型筛选：全部 → deb → snap → flatpak → appimage。
         直接走 inventory.select 的 pkg_type 参数，不另写一套过滤逻辑，
         这样和 `pkgtool list -t xxx` 的结果永远一致。"""
         i = _TYPE_CYCLE.index(self.ptype) if self.ptype in _TYPE_CYCLE else 0
@@ -294,7 +278,6 @@ class App:
                     f"  [{t}] {n} 个 ({e:.1f}s)" + (f"  失败: {err}" if err else "")))
             self._index = None
         scr.run_external(go)
-        self.env = ""
         self.rebuild()
         self.msg = f"已重新采集 {len(self.inv.records)} 条 @ {self.inv.collected_at}"
 
@@ -366,8 +349,6 @@ class App:
             bits.append(f"过滤 “{self.q}”")
         if self.ptype != "all":
             bits.append("类型 " + labels.PKG_TYPE_LABEL.get(self.ptype, self.ptype))
-        if self.env:
-            bits.append("env=" + self.env)
         if self.view in (_LIST, _LOCAL) and self.show_system:
             bits.append("含系统组件")
         if self.view == _SEARCH:
@@ -419,13 +400,6 @@ class App:
         elif it.kind == "repo":
             self.detail_rec, self.detail_item = None, it.data
             self.detail_lines = catalog.describe(it.data, self.cfg).splitlines()
-        elif it.kind == "env":
-            self.env = it.data["label"]
-            self.filter[_LIST] = ""
-            self.set_view(_LIST)
-            self.rebuild()
-            self.msg = f"已按环境过滤：{self.env}"
-            return
         self.scroll = 0
         self.mode = "detail"
 
@@ -607,7 +581,7 @@ def _nav(app, kind, val):
         if val == "\t":
             app.set_view((app.view + 1) % len(VIEWS))
             return True
-        if val in "1234567":
+        if val in "123456789"[:len(VIEWS)]:
             app.set_view(int(val) - 1)
             return True
     if kind == "key" and val == curses.KEY_BTAB:

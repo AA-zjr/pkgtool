@@ -2,8 +2,8 @@
 
 不同包格式的升级方式完全不同，这层负责"给定一条记录，该用哪个命令升"，
 CLI 与交互界面共用（原 Web UI 里 apt 和 flatpak 是两份几乎一样的后台任务代码）。
-pip 包不做代执行：它属于某个具体环境，用当前解释器去升级会装错地方，
-只给出建议命令。
+散落包文件与 AppImage 没有系统级更新通道，plan() 返回 None，调用方改为打印
+labels.update_advice 的建议文案。
 """
 from .apt import actions
 from .config import CFG

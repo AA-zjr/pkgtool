@@ -125,10 +125,11 @@ def _pip_cache(inv, cfg):
 
 
 def _conda_cache(inv, cfg):
-    """conda 包缓存。用 conda clean -a：它知道哪些包还被环境引用着。"""
-    from .backends.pip import conda_dists
+    """conda 包缓存。用 conda clean -a：它知道哪些包还被环境引用着。
+    conda 根目录由 config.conda_roots 定位——这里只是找缓存目录，
+    不做任何环境探测（环境管理已整体移除）。"""
     out = []
-    for dist in conda_dists(cfg):
+    for dist in cfg.conda_roots:
         pkgs = os.path.join(dist, cfg.conda_pkgs_subdir)
         if not os.path.isdir(pkgs):
             continue

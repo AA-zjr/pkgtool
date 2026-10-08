@@ -125,12 +125,6 @@ def render_summary(inv, top=15):
         if len(up) > top:
             out.append(f"  ... 其余 {len(up) - top} 个用 `pkgtool list --upgradable` 查看")
 
-    if inv.py_envs:
-        out.append("\n=== Python 环境（pip 嗅探覆盖）===")
-        for e in inv.py_envs:
-            note = " · 空壳（没装 python）" if e.get("empty") else ""
-            out.append(f"  {e['label']:<44}{e['packages']:>5}{note}")
-
     if inv.errors:
         out.append("\n=== 采集失败的后端 ===")
         for be, err in inv.errors.items():
@@ -191,7 +185,7 @@ def render_detail(rec):
 
     extra = {k: v for k, v in rec.extra.items()
              if k not in ("loose", "state", "desktop_id", "apt_mark",
-                          "ext_states", "mark_conflict", "top_dirs", "env",
+                          "ext_states", "mark_conflict", "top_dirs",
                           "commands")}   # commands 已在「可执行文件」里列过
     if extra:
         out.append("\n  格式特有字段:")
@@ -260,8 +254,7 @@ def _json_default(o):
 def render_json(inv, records=None):
     return json.dumps({
         "meta": {"collected_at": inv.collected_at, "elapsed": inv.elapsed,
-                 "per_type": inv.per_type, "errors": inv.errors,
-                 "python_environments": inv.py_envs},
+                 "per_type": inv.per_type, "errors": inv.errors},
         "packages": [vars(r) for r in (records if records is not None else inv.records)],
     }, ensure_ascii=False, indent=2, default=_json_default)
 
