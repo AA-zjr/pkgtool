@@ -34,6 +34,7 @@ class Plan:
     residues: list = field(default_factory=list)      # [(path, size_mb)]
     freed_mb: float = 0.0
     steps: list = field(default_factory=list)         # 需特权的 argv 列表
+    plain_steps: list = field(default_factory=list)   # 无需特权的 argv（用户级 flatpak 卸载）
     user_paths: list = field(default_factory=list)    # 主目录内，普通权限可删
     error: str = ""
 
@@ -41,6 +42,7 @@ class Plan:
     def command_text(self):
         """等效命令，供复制粘贴到终端手动执行。"""
         out = ["sudo " + " ".join(shlex.quote(a) for a in argv) for argv in self.steps]
+        out += [" ".join(shlex.quote(a) for a in argv) for argv in self.plain_steps]
         out += [f"rm -rf {shlex.quote(p)}" for p in self.user_paths]
         return " && ".join(out)
 
@@ -186,15 +188,22 @@ def _snap_steps(rec, target, purge_residues):
 
 
 def _flatpak_steps(rec, target, purge_residues):
+    """→ (argv, user)。用户级安装（installation=user）不需要 root——
+    原实现一律套 sudo，在无终端环境下会因 sudo 无法认证而整个失败。"""
     argv = ["flatpak", "uninstall", "-y"]
     if purge_residues:
         argv.append("--delete-data")
-    if rec.extra.get("installation") == "user":
+    user = rec.extra.get("installation") == "user"
+    if user:
         argv.append("--user")
     arch, branch = rec.extra.get("arch"), rec.extra.get("branch")
-    if arch and branch:              # 同 app-id 可能并存多 arch/branch，必须指明
-        argv += [f"--arch={arch}", f"--branch={branch}"]
-    return [argv + [target]]
+    if arch:                         # --arch 是 uninstall 的合法选项
+        argv.append(f"--arch={arch}")
+    if branch:
+        # uninstall 没有 --branch 选项，branch 要编码进 ref：flatpak 的部分
+        # 引用语法 名称//分支（写成 --branch=stable 会被直接拒绝）
+        target = f"{target}//{branch}"
+    return argv + [target], user
 
 
 def preview(rec, purge_residues=False, autoremove=True, cfg=CFG):
@@ -208,13 +217,15 @@ def preview(rec, purge_residues=False, autoremove=True, cfg=CFG):
                     error=f"目标名非法，拒绝操作：{target!r}")
 
     will_remove, err = [target], ""
+    steps, plain_steps = [], []
     if t == "deb":
         will_remove, err = _apt_dry_run(target, autoremove, cfg)
         steps = _deb_steps(rec, target, purge_residues, autoremove, cfg)
     elif t == "snap":
         steps = _snap_steps(rec, target, purge_residues)
     elif t.startswith("flatpak"):
-        steps = _flatpak_steps(rec, target, purge_residues)
+        argv, user = _flatpak_steps(rec, target, purge_residues)
+        (plain_steps if user else steps).append(argv)
     elif t == "appimage":
         steps = []
     else:
@@ -238,18 +249,28 @@ def preview(rec, purge_residues=False, autoremove=True, cfg=CFG):
     return Plan(ok=not err, pkg_type=t, name=rec.name, target=target,
                 will_remove=will_remove, residues=residues,
                 freed_mb=round(sum(s for _p, s in residues), 1),
-                steps=steps, user_paths=user_paths, error=err)
+                steps=steps, plain_steps=plain_steps,
+                user_paths=user_paths, error=err)
 
 
 def execute(plan, password=None, on_line=None, cfg=CFG):
-    """照 Plan 执行：先特权步骤（任一步失败即停，不留半删状态），
-    再删主目录内的残留。只报告实际删掉的路径。"""
+    """照 Plan 执行：先特权步骤（任一步失败即停，不留半删状态），再跑无需
+    特权的命令步骤，最后删主目录内的残留。只报告实际删掉的路径。"""
     if not plan.ok:
         return actions.Result(ok=False, error=plan.error or "预览未通过，拒绝执行")
     outputs = []
-    for argv in plan.steps:
-        r = actions.run_privileged(argv, password=password,
-                                   timeout=cfg.timeout_remove, on_line=on_line, cfg=cfg)
+
+    def run(argv, privileged):
+        if privileged:
+            return actions.run_privileged(argv, password=password,
+                                          timeout=cfg.timeout_remove,
+                                          on_line=on_line, cfg=cfg)
+        return actions.run_plain(argv, timeout=cfg.timeout_remove, cfg=cfg)
+
+    tagged = [(argv, True) for argv in plan.steps] \
+        + [(argv, False) for argv in plan.plain_steps]
+    for argv, privileged in tagged:
+        r = run(argv, privileged)
         outputs.append(r.output)
         if not r.ok:
             return actions.Result(ok=False, returncode=r.returncode,
@@ -258,4 +279,4 @@ def execute(plan, password=None, on_line=None, cfg=CFG):
     outputs += [f"已删除残留 {p}" for p in removed]
     return actions.Result(ok=not failed, output="\n".join(o for o in outputs if o),
                           error="; ".join(failed), file=",".join(removed),
-                          command=plan.steps[0] if plan.steps else [])
+                          command=tagged[0][0] if tagged else [])
