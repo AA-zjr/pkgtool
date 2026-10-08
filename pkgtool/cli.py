@@ -9,7 +9,7 @@
 import argparse
 import sys
 
-from . import clean, inventory, labels, report, tui, upgrade
+from . import catalog, clean, inventory, labels, report, tui, upgrade
 from .apt import actions, lists
 from .backends import pip as pip_backend
 from .config import CFG
@@ -139,11 +139,43 @@ def cmd_envs(args):
 
 
 def cmd_search(args):
-    idx = lists.load_index(CFG)
-    if not len(idx):
-        _err("apt 索引为空：先跑 sudo apt-get update")
+    sources = None if args.source == "all" else (args.source,)
+    want = sources or catalog.available(CFG)
+    hits = catalog.search(args.query, sources=sources, limit=args.limit, cfg=CFG,
+                          installed=catalog.installed_names(CFG, want))
+    if not hits:
+        for e in catalog.LAST_ERRORS:
+            _err("  !! " + e)
+        _err(f"未找到与 “{args.query}” 相关的条目")
         return 1
-    return _write(report.render_search(idx.search(args.query, args.limit)))
+    return _write(report.render_catalog(hits), args.output)
+
+
+def cmd_install(args):
+    """从 apt / snap / flatpak 目录安装。来源必须显式指定或能唯一确定。"""
+    item = catalog.CatalogItem(source=args.source, name=args.name)
+    if args.source == "snap" and args.classic:
+        item.classic = True
+    if args.source == "flatpak":
+        # 不指明 remote 时 flatpak 会自己挑或反问；本机只有一个 remote 就直接用
+        remotes = catalog.flatpak_remotes(CFG)
+        item.remote = args.remote or (remotes[0] if len(remotes) == 1 else "")
+        if not item.remote:
+            _err("请用 --remote 指定从哪个 remote 安装，本机有：" + ", ".join(remotes))
+            return 2
+    argv, err = catalog.install_argv(item, args.version)
+    if argv is None:
+        _err(err)
+        return 2
+    _err("将执行: sudo " + " ".join(argv))
+    if not args.yes and not _confirm("确认安装?"):
+        _err("已取消")
+        return 1
+    res = catalog.install(item, version=args.version, on_line=print, cfg=CFG)
+    if res.ok:
+        print(f"✓ 安装完成 {args.name}")
+        return 0
+    return _fail(res)
 
 
 def cmd_show(args):
@@ -355,9 +387,12 @@ def build_parser():
     p = sub.add_parser("envs", help="探测到的 Python 环境与各自包数")
     p.set_defaults(func=cmd_envs)
 
-    p = sub.add_parser("search", help="在已配置的 apt 源里搜索（离线，读本地索引）")
+    p = sub.add_parser("search", help="跨源搜索：apt 本地索引 / Snap Store / flathub")
     p.add_argument("query")
-    p.add_argument("-n", "--limit", type=int, default=30)
+    p.add_argument("-s", "--source", choices=catalog.SOURCES + ("all",),
+                   default="all", help="限定来源（默认全部可用来源）")
+    p.add_argument("-n", "--limit", type=int, default=30, help="每个来源最多几条")
+    p.add_argument("-o", "--output", default="")
     p.set_defaults(func=cmd_search)
 
     p = sub.add_parser("show", help="某个包在 apt 源里的全部候选版本")
@@ -369,6 +404,18 @@ def build_parser():
     p.add_argument("-v", "--version", default="", help="指定版本，默认仓库最新版")
     p.add_argument("-d", "--dest", default="", help=f"保存目录（默认 {CFG.download_dir}）")
     p.set_defaults(func=cmd_download)
+
+    p = sub.add_parser("install", help="从 apt / snap / flatpak 目录安装")
+    p.add_argument("name", help="安装标识：apt 包名 / snap 名 / flatpak app-id")
+    p.add_argument("-s", "--source", required=True, choices=catalog.SOURCES,
+                   help="来源必须显式指定：三个源的命名空间会重名"
+                        "（firefox 在 apt 和 snap 里都有，但装出来的东西不一样）")
+    p.add_argument("-v", "--version", default="", help="指定版本（仅 apt 支持）")
+    p.add_argument("--classic", action="store_true",
+                   help="snap 经典 confinement（搜索时会自动识别，手动装才需要）")
+    p.add_argument("--remote", default="", help="flatpak 的 remote 名（默认 flathub）")
+    p.add_argument("-y", "--yes", action="store_true", help="跳过确认")
+    p.set_defaults(func=cmd_install)
 
     p = sub.add_parser("upgrade", help="升级指定包；不带参数则列出可升级项")
     p.add_argument("names", nargs="*")

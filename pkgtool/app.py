@@ -16,18 +16,23 @@ import locale
 import sys
 from dataclasses import dataclass
 
-from . import clean, classify, inventory, labels, remove, report, tui, upgrade
+from . import (catalog, clean, classify, inventory, labels, remove, report,
+               tui, upgrade)
 from .apt import actions, lists
 from .backends import pip as pip_backend
 from .config import CFG
 from .report import pad, truncate
 
 VIEWS = ("全部包", "本地自装", "可升级", "散落包文件", "磁盘回收",
-         "apt 搜索", "Python 环境")
+         "仓库搜索", "Python 环境")
 _LIST, _LOCAL, _UPGRADABLE, _LOOSE, _CLEAN, _SEARCH, _ENV = range(len(VIEWS))
 _SEARCH_LIMIT = 80
 # t 键循环的包类型；flatpak 一项同时覆盖 flatpak 与 flatpak-runtime
 _TYPE_CYCLE = ("all", "deb", "snap", "flatpak", "appimage", "pip")
+# 仓库搜索视图里 s 键循环的目录来源（见 catalog.py）
+_SOURCE_CYCLE = ("all", "apt", "snap", "flatpak")
+_SOURCE_LABEL = {"all": "全部来源", "apt": "apt 源", "snap": "Snap Store",
+                 "flatpak": "flathub"}
 
 _HELP = """按键一览
 
@@ -48,9 +53,18 @@ _HELP = """按键一览
     Enter             删除当前项         空格        标记 / 取消标记
     x                 删除全部标记项      T           切换「移入回收站 / 真删」
 
-  apt 搜索视图
-    Enter             看该包的全部候选版本
-    i                 安装 / 升级到候选版本      d   只下载 .deb
+  仓库搜索视图（apt 源 / Snap Store / flathub 三源）
+    /                 输入关键词         s           切换来源（全部/apt/snap/flatpak）
+    Enter             详情：apt 列全部候选版本，snap 给 snap info，flatpak 给基本字段
+    i                 安装：按来源自动选 apt-get / snap install / flatpak install
+    d                 只下载 .deb（仅 apt 源）
+
+  三个来源的差别（见 catalog.py）
+    apt      读本地索引，离线、毫秒级，含描述与全部候选版本
+    snap     联网查 Snap Store，约 2 秒，含发布者/摘要；classic 会自动补 --classic
+    flatpak  读本地 remote 缓存，0.3 秒 / 3483 条，有体积但**没有描述**
+             （描述在 appstream 缓存里，本机没有；flatpak 官方的 search 命令
+              在这种情况下会联网拉取并挂死，所以不用它）
 
 「大小」列的含义
     12.3 MB           包自身的已安装体积
@@ -105,6 +119,7 @@ class App:
         self.filter = {i: "" for i in range(len(VIEWS))}
         self.show_system = False
         self.ptype = "all"             # 包类型筛选，t 键循环
+        self.source = "all"            # 仓库搜索的来源筛选，s 键循环
         self.env = ""
         self.trash = False
         self.items = []
@@ -112,7 +127,7 @@ class App:
         self.mode = "list"               # list / detail
         self.detail_lines = []
         self.detail_rec = None           # 详情对应的记录（供 r/u/d）
-        self.detail_repo = None          # 详情对应的仓库包名（供 i/d）
+        self.detail_item = None          # 详情对应的仓库包名（供 i/d）
         self.scroll = 0
         self.msg = "按 ? 看帮助"
         self._index = None
@@ -205,17 +220,31 @@ class App:
 
     def _repo_search(self):
         if not self.q:
-            return [Item("hint", "按 / 输入关键词，搜索所有已配置的 apt 源",
-                         "", None, "dim")]
-        hits = self.index().search(self.q, _SEARCH_LIMIT)
+            return [Item("hint",
+                         "按 / 输入关键词，搜 apt 源 / Snap Store / flathub"
+                         "（s 键切换来源）", "", None, "dim")]
+        hits = catalog.search(self.q,
+                              sources=None if self.source == "all" else (self.source,),
+                              limit=_SEARCH_LIMIT, cfg=self.cfg,
+                              installed=catalog.installed_keys(self.inv))
         if not hits:
-            return [Item("hint", f"未找到与 “{self.q}” 相关的包", "", None, "dim")]
-        return [Item("repo",
-                     pad(truncate(x["name"], 34), 36)
-                     + pad(truncate(x["version"], 24), 26)
-                     + pad(f"{x['size_kb']}K", 9)
-                     + truncate(x["repo"] or "", 26),
-                     truncate(x.get("desc") or "", 110), x) for x in hits]
+            note = ("：" + "；".join(catalog.LAST_ERRORS)) if catalog.LAST_ERRORS else ""
+            return [Item("hint", f"未找到与 “{self.q}” 相关的条目{note}",
+                         "", None, "dim")]
+        out = []
+        for x in hits:
+            # apt / snap 的显示名就是安装标识，重复占两列纯浪费宽度；
+            # flatpak 才有独立的显示名（Browser vs com.brave.Browser）
+            ident = "" if x.name == x.title else x.name
+            head = (pad(x.source, 8) + pad("已装" if x.installed else "", 5)
+                    + pad(truncate(x.title, 24), 26)
+                    + pad(truncate(ident, 28), 30)
+                    + pad(truncate(x.version or "—", 14), 16)
+                    + pad(x.size_text or "—", 9, ">"))
+            sub = " · ".join(t for t in (x.publisher, x.channel, x.summary) if t)
+            out.append(Item("repo", head, truncate(sub, 120), x,
+                            "ok" if x.installed else "norm"))
+        return out
 
     def _envs(self):
         out = []
@@ -240,6 +269,16 @@ class App:
         name = ("全部类型" if self.ptype == "all"
                 else labels.PKG_TYPE_LABEL.get(self.ptype, self.ptype))
         self.msg = f"包类型：{name} → {len(self.items)} 项"
+
+    def cycle_source(self):
+        """s 键（仅在仓库搜索视图）循环目录来源。
+        snap 要联网约 2 秒、flatpak 首次要拉全量清单，能只搜一个源就只搜一个。"""
+        i = _SOURCE_CYCLE.index(self.source) if self.source in _SOURCE_CYCLE else 0
+        self.source = _SOURCE_CYCLE[(i + 1) % len(_SOURCE_CYCLE)]
+        self.rebuild()
+        el = " · ".join(f"{k} {v}s" for k, v in catalog.LAST_ELAPSED.items())
+        self.msg = (f"来源：{_SOURCE_LABEL[self.source]} → {len(self.items)} 条"
+                    + (f"（{el}）" if el else ""))
 
     def set_view(self, v):
         if v != self.view:
@@ -301,13 +340,17 @@ class App:
         scr.refresh()
 
     def _header(self):
-        """包列表视图的列头，列宽与 _pkg_item 一一对应（改一处必须改另一处）。
-        其他视图各自排版，不加列头。"""
-        if self.view not in (_LIST, _LOCAL, _UPGRADABLE):
-            return None
-        return (pad("类型", 10) + pad("名称", 32) + pad("版本", 24)
-                + pad("大小", 13, ">") + " " + pad("通道", 10)
-                + pad("类别", 9) + pad("首次安装", 10))
+        """列表视图的列头，列宽与对应的 _pkg_item / _repo_search 一一对应
+        （改一处必须改另一处）。其余视图各自排版，不加列头。"""
+        if self.view in (_LIST, _LOCAL, _UPGRADABLE):
+            return (pad("类型", 10) + pad("名称", 32) + pad("版本", 24)
+                    + pad("大小", 13, ">") + " " + pad("通道", 10)
+                    + pad("类别", 9) + pad("首次安装", 10))
+        if self.view == _SEARCH and self.q:
+            return (pad("来源", 8) + pad("", 5) + pad("名称", 26)
+                    + pad("安装标识", 30) + pad("版本", 16)
+                    + pad("体积", 9, ">"))
+        return None
 
     def _tabs(self):
         return " ".join(f"[{i}]{n}" if i - 1 == self.view else f" {i} {n} "
@@ -327,6 +370,11 @@ class App:
             bits.append("env=" + self.env)
         if self.view in (_LIST, _LOCAL) and self.show_system:
             bits.append("含系统组件")
+        if self.view == _SEARCH:
+            bits.append("来源 " + _SOURCE_LABEL[self.source])
+            el = " ".join(f"{k}{v}s" for k, v in catalog.LAST_ELAPSED.items())
+            if el:
+                bits.append(el)
         if self.view == _CLEAN:
             bits.append("回收站模式" if self.trash else "真删模式")
         return bits
@@ -345,11 +393,14 @@ class App:
 
     def _hints(self):
         if self.mode == "detail":
-            if self.detail_repo:
-                return "i 安装/升级 · d 下载 .deb · ↑↓ 滚动 · q 返回列表"
+            if self.detail_item:
+                return ("i 安装 · d 下载 .deb（仅 apt）· ↑↓ 滚动 · q 返回列表")
             return "r 卸载 · u 升级 · d 下载 .deb · ↑↓ 滚动 · q 返回列表"
         if self.view == _CLEAN:
             return ("Enter 删除 · 空格 标记 · x 删标记 · T 切回收站 · / 过滤 · "
+                    "Tab 换视图 · ? 帮助 · q 退出")
+        if self.view == _SEARCH:
+            return ("/ 搜索 · s 切来源 · Enter 详情 · i 安装 · d 下载(apt) · "
                     "Tab 换视图 · ? 帮助 · q 退出")
         if self.view in (_LIST, _LOCAL, _UPGRADABLE, _LOOSE):
             return ("Enter 详情 · r 卸载 · u 升级 · d 下载 · / 搜索 · t 类型 · "
@@ -363,13 +414,11 @@ class App:
         if it is None or it.data is None:
             return
         if it.kind == "pkg":
-            self.detail_rec, self.detail_repo = it.data, None
+            self.detail_rec, self.detail_item = it.data, None
             self.detail_lines = report.render_detail(it.data).splitlines()
         elif it.kind == "repo":
-            self.detail_rec, self.detail_repo = None, it.data["name"]
-            info = self.index().info(it.data["name"])
-            self.detail_lines = (report.render_versions(info).splitlines()
-                                 if info else ["仓库中无此包"])
+            self.detail_rec, self.detail_item = None, it.data
+            self.detail_lines = catalog.describe(it.data, self.cfg).splitlines()
         elif it.kind == "env":
             self.env = it.data["label"]
             self.filter[_LIST] = ""
@@ -381,14 +430,14 @@ class App:
         self.mode = "detail"
 
     def show_help(self):
-        self.detail_rec = self.detail_repo = None
+        self.detail_rec = self.detail_item = None
         self.detail_lines = _HELP.splitlines()
         self.scroll = 0
         self.mode = "detail"
 
     def close_detail(self):
         self.mode = "list"
-        self.detail_rec = self.detail_repo = None
+        self.detail_rec = self.detail_item = None
 
     # ---------- 动作（都在真实终端上执行）----------
 
@@ -455,20 +504,34 @@ class App:
             self.rebuild()
             self.msg = f"已升级 {rec.name}（按 R 重新采集可刷新全部数据）"
 
-    def act_install(self, scr, name, version=""):
-        """从 apt 源安装 / 升级到指定版本。"""
+    def act_install_item(self, scr, item):
+        """从目录安装（apt / snap / flatpak 三源统一入口）。
+        命令由 catalog.install_argv 生成：snap 的 classic confinement 必须带
+        --classic，flatpak 要带上 remote 名，这些差异都收在 catalog 里。"""
         def go():
-            print(f"\n安装 {name} {version or '(候选版本)'}")
+            argv, err = catalog.install_argv(item)
+            if argv is None:
+                print(f"拒绝安装：{err}")
+                _pause()
+                return False
+            print(f"\n安装 [{item.source}] {item.title}（{item.name}）")
+            if item.version:
+                print(f"  版本: {item.version}")
+            if item.size_text:
+                print(f"  体积: {item.size_text}")
+            print("  命令: " + " ".join(argv))
+            if item.installed:
+                print("  注意：本机已装过同名包，这会变成升级/覆盖安装")
             if not _ask_yes("执行?"):
                 return False
-            res = actions.upgrade(name, version, on_line=print, cfg=self.cfg)
+            res = catalog.install(item, on_line=print, cfg=self.cfg)
             print("✓ 完成" if res.ok else f"✗ 失败：{res.error}")
             _pause()
             return res.ok
 
         if scr.run_external(go):
             self.close_detail()
-            self.msg = f"已安装 {name}（按 R 重新采集以刷新列表）"
+            self.msg = f"已安装 {item.name}（按 R 重新采集以刷新列表）"
 
     def act_download(self, scr, name, version=""):
         def go():
@@ -582,12 +645,15 @@ def _main(std, cfg, inv):
                 app.act_remove(scr, app.detail_rec)
             elif kind == "char" and val == "u" and app.detail_rec:
                 app.act_upgrade(scr, app.detail_rec)
-            elif kind == "char" and val == "i" and app.detail_repo:
-                info = app.index().info(app.detail_repo) or {}
-                app.act_install(scr, app.detail_repo, info.get("candidate", ""))
+            elif kind == "char" and val == "i" and app.detail_item:
+                app.act_install_item(scr, app.detail_item)
             elif kind == "char" and val == "d":
-                if app.detail_repo:
-                    app.act_download(scr, app.detail_repo)
+                if app.detail_item:
+                    if app.detail_item.source == "apt":
+                        app.act_download(scr, app.detail_item.name,
+                                         app.detail_item.version)
+                    else:
+                        app.msg = "只有 apt 源的包能单独下载 .deb"
                 elif app.detail_rec and app.detail_rec.pkg_type == "deb":
                     app.act_download(scr, app.detail_rec.name,
                                      app.detail_rec.candidate)
@@ -604,10 +670,15 @@ def _main(std, cfg, inv):
             app.edit_filter(scr)
             continue
         if kind == "char" and val == "s":
-            app.show_system = not app.show_system
-            app.rebuild()
-            app.msg = ("显示系统预装与自动依赖" if app.show_system
-                       else "隐藏系统预装与自动依赖")
+            # 同一个键在搜索视图里切来源、在包视图里切"是否含系统组件"：
+            # 两个语义在各自视图里都用得上，且互不冲突
+            if app.view == _SEARCH:
+                app.cycle_source()
+            else:
+                app.show_system = not app.show_system
+                app.rebuild()
+                app.msg = ("显示系统预装与自动依赖" if app.show_system
+                           else "隐藏系统预装与自动依赖")
             continue
         if kind == "char" and val == "R":
             app.reload(scr)
@@ -649,10 +720,20 @@ def _main(std, cfg, inv):
             if it and it.kind == "pkg":
                 app.act_upgrade(scr, it.data)
             continue
+        if kind == "char" and val == "i":
+            it = app.current()
+            if it and it.kind == "repo":
+                app.act_install_item(scr, it.data)
+            else:
+                app.msg = "安装只在「仓库搜索」视图里可用"
+            continue
         if kind == "char" and val == "d":
             it = app.current()
             if it and it.kind == "repo":
-                app.act_download(scr, it.data["name"], it.data["version"])
+                if it.data.source == "apt":
+                    app.act_download(scr, it.data.name, it.data.version)
+                else:
+                    app.msg = "只有 apt 源的包能单独下载 .deb"
             elif it and it.kind == "pkg" and it.data.pkg_type == "deb":
                 app.act_download(scr, it.data.name, it.data.candidate)
             else:

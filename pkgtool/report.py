@@ -275,6 +275,32 @@ def render_uninstall_list(records):
     return render_table(records, cols)
 
 
+_CATALOG_COLUMNS = [
+    ("来源", lambda x: x.source, 7, "<"),
+    ("", lambda x: "已装" if x.installed else "", 4, "<"),
+    ("名称", lambda x: x.title, 22, "<"),
+    ("安装标识", lambda x: x.name if x.name != x.title else "", 26, "<"),
+    ("版本", lambda x: x.version or "—", 14, "<"),
+    ("体积", lambda x: x.size_text or "—", 9, ">"),
+    ("发布者/源", lambda x: x.publisher or "—", 16, "<"),
+    ("说明", lambda x: x.summary or x.channel or "", 34, "<"),
+]
+
+
+def render_catalog(items):
+    """跨源搜索结果（apt / snap / flatpak）。"""
+    if not items:
+        return "  （未找到相关条目）"
+    from . import catalog
+    out = [render_table(items, _CATALOG_COLUMNS)]
+    el = " · ".join(f"{k} {v}s" for k, v in catalog.LAST_ELAPSED.items())
+    out.append(f"\n  共 {len(items)} 条（{el}）")
+    for e in catalog.LAST_ERRORS:
+        out.append(f"  !! {e}")
+    out.append("  安装：pkgtool install <安装标识> --source <来源>")
+    return "\n".join(out)
+
+
 def render_clean(targets):
     """`pkgtool clean --list`：可清理目标一览（每项两行：概要 + 路径与执行方式）。"""
     if not targets:

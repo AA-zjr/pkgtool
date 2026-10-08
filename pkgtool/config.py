@@ -116,6 +116,10 @@ class Config:
     index_cache_ttl: float = 300.0   # apt 索引解析缓存（apt update 后自动失效）
     env_cache_ttl: float = 60.0      # Python 环境探测缓存
 
+    # ---- 远程目录搜索（catalog）----
+    timeout_catalog: int = 30        # snap find / flatpak remote-ls 的超时
+    catalog_cache_ttl: float = 300.0  # flatpak 全量清单与 snap 查询结果的缓存
+
     # ---- 子进程超时（秒）----
     timeout_query: int = 30          # snap list / flatpak list / dpkg-deb 一类查询
     timeout_mark: int = 120          # apt-mark
