@@ -1,7 +1,7 @@
 """pkgtool.app — 交互式主界面（裸跑 `pkgtool` 进入）。
 
 六个视图，Tab 或数字键切换：
-  1 全部包  2 本地自装  3 可升级  4 散落包文件  5 仓库搜索  6 磁盘回收
+  1 全部包  2 可升级  3 散落包文件  4 仓库搜索  5 磁盘回收
 
 本文件只有界面与状态机，业务规则一律走既有各层：inventory 取数、classify 判定、
 remove / clean / upgrade / actions 执行、labels / report 出文案。这样交互界面和
@@ -22,8 +22,8 @@ from .apt import actions, lists
 from .config import CFG
 from .report import pad, truncate
 
-VIEWS = ("全部包", "本地自装", "可升级", "散落包文件", "仓库搜索", "磁盘回收")
-_LIST, _LOCAL, _UPGRADABLE, _LOOSE, _SEARCH, _CLEAN = range(len(VIEWS))
+VIEWS = ("全部包", "可升级", "散落包文件", "仓库搜索", "磁盘回收")
+_LIST, _UPGRADABLE, _LOOSE, _SEARCH, _CLEAN = range(len(VIEWS))
 _SEARCH_LIMIT = 80
 # t 键循环的包类型；flatpak 一项同时覆盖 flatpak 与 flatpak-runtime
 _TYPE_CYCLE = ("all", "deb", "snap", "flatpak", "linyap", "appimage")
@@ -146,7 +146,7 @@ class App:
         return self._index
 
     def rebuild(self):
-        builders = (self._pkgs_all, self._pkgs_local, self._pkgs_upgradable,
+        builders = (self._pkgs_all, self._pkgs_upgradable,
                     self._loose, self._repo_search, self._targets)
         self.items = builders[self.view]()
         self.lv.set_items(self.items)
@@ -207,11 +207,6 @@ class App:
     def _pkgs_all(self):
         return [self._pkg_item(r) for r in inventory.select(
             self.inv, level=self.level, query=self.q, pkg_type=self.ptype)]
-
-    def _pkgs_local(self):
-        return [self._pkg_item(r) for r in inventory.select(
-            self.inv, only_local=True, level=self.level,
-            query=self.q, pkg_type=self.ptype)]
 
     def _pkgs_upgradable(self):
         return [self._pkg_item(r) for r in inventory.select(
@@ -357,7 +352,7 @@ class App:
     def _header(self):
         """列表视图的列头，列宽与对应的 _pkg_item / _repo_search 一一对应
         （改一处必须改另一处）。其余视图各自排版，不加列头。"""
-        if self.view in (_LIST, _LOCAL, _UPGRADABLE):
+        if self.view in (_LIST, _UPGRADABLE):
             return (pad("类型", 10) + pad("名称", 32) + pad("版本", 24)
                     + pad("大小", 13, ">") + " " + pad("通道", 10)
                     + pad("类别", 9) + pad("首次安装", 10))
@@ -381,7 +376,7 @@ class App:
             bits.append(f"过滤 “{self.q}”")
         if self.ptype != "all":
             bits.append("类型 " + labels.PKG_TYPE_LABEL.get(self.ptype, self.ptype))
-        if self.view in (_LIST, _LOCAL) and self.level:
+        if self.view == _LIST and self.level:
             bits.append({1: "软件+依赖", 2: "全部层级"}[self.level])
         if self.view == _SEARCH:
             bits.append("来源 " + _SOURCE_LABEL[self.source])
@@ -431,13 +426,13 @@ class App:
                     bits.append("d 下载")
             bits += ["? 帮助", "q 退出"]
             return " · ".join(bits)
-        if self.view in (_LIST, _LOCAL, _UPGRADABLE, _LOOSE):
+        if self.view in (_LIST, _UPGRADABLE, _LOOSE):
             bits = ["Enter 详情"]
             rec = self._sel_rec()
             if rec:
                 bits += self._rec_hints(rec)
             bits += ["/ 搜索", "t 筛选"]
-            if self.view in (_LIST, _LOCAL):
+            if self.view == _LIST:
                 bits.append("s 层级")
             bits += ["R 重采", "? 帮助", "q 退出"]
             return " · ".join(bits)
@@ -770,8 +765,8 @@ def _main(std, cfg, inv):
             app.msg = ("删除方式：移入回收站（可还原）" if app.trash
                        else "删除方式：真删")
             continue
-        if kind == "char" and val == "t" and app.view in (_LIST, _LOCAL,
-                                                          _UPGRADABLE, _LOOSE):
+        if kind == "char" and val == "t" and app.view in (_LIST, _UPGRADABLE,
+                                                          _LOOSE):
             app.cycle_type()
             continue
         if app.view == _CLEAN and kind == "char" and val == " ":
