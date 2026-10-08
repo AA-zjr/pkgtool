@@ -22,7 +22,7 @@ apt 3.2.0 / dpkg 1.23.7 / snap 2.77.1 / flatpak 1.16.6 / ll-cli 1.12.3
 ## 安装
 
 ```bash
-pipx install pkg-tool
+pipx install pkgmate
 ```
 
 或下载 Release 里的单文件 `pkgtool-*.pyz`：
