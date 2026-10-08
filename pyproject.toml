@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pkgtool"
+name = "pkg-tool"
 dynamic = ["version"]
 description = "Debian 系本地软件包盘点与管理工具（零第三方依赖）"
 requires-python = ">=3.10"
