@@ -77,8 +77,10 @@ CLEAN_KIND_LABEL = {
     "conda-cache": "conda 包缓存",
 }
 
-# 发行版官方源的 Label 关键字（取自 Release 文件的 Label/Origin，属外部数据而非本工具结论）
-_DISTRO_LABELS = frozenset({"ubuntu", "debian"})
+# 发行版官方源的 Label 关键字（取自 Release 文件的 Label/Origin，属外部数据
+# 而非本工具结论）。deepin 官方源的 Label/Origin 写作 "Deepin"，UOS 写 "UOS"；
+# 统计名 = Release 文件首段小写。deepin 社区镜像与官方源同标签，一并命中。
+_DISTRO_LABELS = frozenset({"ubuntu", "debian", "deepin", "uos"})
 
 
 def channel_text(channel):
@@ -147,7 +149,7 @@ def origin_text(rec):
 
 
 def is_distro_official(rec):
-    """来源是否为发行版官方源（Ubuntu/Debian，含其镜像）。
+    """来源是否为发行版官方源（Ubuntu/Debian/deepin/UOS，含其镜像）。
     源标签形如 "Ubuntu noble/main"，首段就是 Release 文件的 Label。"""
     return any(lbl.split(" ", 1)[0].lower() in _DISTRO_LABELS
                for lbl in rec.origin_repos)
