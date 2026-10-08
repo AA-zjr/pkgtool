@@ -57,7 +57,9 @@ def dpkg_installs(cfg=CFG):
 
 
 def apt_history(cfg=CFG):
-    """→ {包名: [(时间, 版本字符串), ...]}，来自 Install/Upgrade 行。"""
+    """→ {包名: [(时间, 版本字符串), ...]}，来自 Install/Upgrade 行。
+    括号里的 ", automatic" 是 apt 的自动安装标记不是版本的一部分，
+    剥掉（Upgrade 行的 "旧版, 新版" 双版本则保留）。"""
     out = defaultdict(list)
     cur_ts = ""
     for line in iter_lines([cfg.apt_history_glob]):
@@ -65,7 +67,10 @@ def apt_history(cfg=CFG):
             cur_ts = " ".join(line.split(":", 1)[1].split())
         elif line.startswith(("Install:", "Upgrade:")):
             for name, ver in _APT_ENTRY_RE.findall(line):
-                out[name].append((cur_ts, ver))
+                parts = [p.strip() for p in ver.split(",")]
+                if parts and parts[-1] == "automatic":
+                    parts = parts[:-1]
+                out[name].append((cur_ts, ", ".join(parts)))
     return dict(out)
 
 

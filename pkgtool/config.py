@@ -24,6 +24,7 @@ _PATH_FIELDS = (
     "dpkg_status", "dpkg_info_dir", "dpkg_log_glob", "apt_history_glob",
     "apt_lists_dir", "apt_archives_dir", "flatpak_system_dir",
     "flatpak_exports_bin", "snap_store_dir", "snap_mount_dir",
+    "linyap_repo_dir",
 )
 
 
@@ -65,6 +66,9 @@ class Config:
     snap_store_dir: str = "/var/lib/snapd/snaps"
     snap_mount_dir: str = "/snap"
 
+    # ---- 如意玲珑（linyaps）----
+    linyap_repo_dir: str = "/var/lib/linglong"
+
     # ---- AppImage ----
     appimage_app_dirs: tuple = ("Applications",)        # 主目录下视为"已安置"
     appimage_system_dirs: tuple = ("/opt", "/usr/local/bin")
@@ -101,7 +105,7 @@ class Config:
     # ---- 磁盘回收（clean 子命令）----
     # 以下 conda_* 只用于定位「包缓存目录」的位置（<conda 根>/pkgs），
     # 不做任何环境探测或环境管理——那部分已按需求整体移除。
-    pip_cache_dir: str = ".cache/pip"   # 相对 home，纯缓存，删了只会重新下载
+    cache_min_mb: float = 1.0          # 用户缓存条目的最小体积（MB），滤掉 KB 级噪音
     conda_pkgs_subdir: str = "pkgs"     # <conda 发行版根>/pkgs 是包缓存
     conda_dir_names: tuple = ("miniconda3", "anaconda3", "miniforge3")
     conda_cache_scan_roots: tuple = ("/opt", "/usr/local")   # 与 home 一起找 conda 根
@@ -151,9 +155,32 @@ class Config:
     def home(self):
         return user_home()
 
+    # XDG 标准根：环境变量优先，缺省值按规范。所有 "~/.local/share"、
+    # "~/.cache" 一类的拼接都必须经过这里，不能在模块里手写——
+    # 用户把 XDG_DATA_HOME / XDG_CACHE_HOME 挪盘时这些路径要跟着走。
+    @property
+    def xdg_data_home(self):
+        return os.environ.get("XDG_DATA_HOME") or \
+            os.path.join(user_home(), ".local", "share")
+
+    @property
+    def xdg_data_dirs(self):
+        raw = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"
+        return tuple(p for p in raw.split(":") if p)
+
+    @property
+    def xdg_cache_home(self):
+        return os.environ.get("XDG_CACHE_HOME") or \
+            os.path.join(user_home(), ".cache")
+
+    @property
+    def flatpak_sandbox_home(self):
+        """flatpak 沙盒应用的 home（规范固定位置，不在 XDG_DATA_HOME 下）。"""
+        return os.path.join(user_home(), ".var", "app")
+
     @property
     def flatpak_user_dir(self):
-        return os.path.join(user_home(), ".local", "share", "flatpak")
+        return os.path.join(self.xdg_data_home, "flatpak")
 
     @property
     def download_dir(self):
@@ -191,18 +218,15 @@ class Config:
         return out
 
     @property
-    def pip_cache_path(self):
-        return os.path.join(user_home(), self.pip_cache_dir)
-
-    @property
     def trash_dir(self):
         """freedesktop 回收站根目录（--trash 时用）。"""
-        return os.path.join(user_home(), ".local", "share", "Trash")
+        return os.path.join(self.xdg_data_home, "Trash")
 
     def dump(self):
         """→ {字段: 值}，供 `pkgtool list -v` 一类诊断输出。"""
         out = {f.name: getattr(self, f.name) for f in fields(self)}
-        for name in ("home", "flatpak_user_dir", "download_dir",
+        for name in ("home", "xdg_data_home", "xdg_cache_home",
+                     "flatpak_user_dir", "download_dir",
                      "scan_roots", "residue_roots"):
             out[name] = getattr(self, name)
         return {k: (sorted(v) if isinstance(v, frozenset) else v)

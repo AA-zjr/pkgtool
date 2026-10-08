@@ -11,6 +11,7 @@ PKG_TYPE_LABEL = {
     "snap": "snap（snap store）",
     "flatpak": "flatpak（应用）",
     "flatpak-runtime": "flatpak（运行库）",
+    "linyap": "linyap（如意玲珑）",
     "appimage": "AppImage（便携）",
 }
 
@@ -41,7 +42,8 @@ BLOCK_REASONS = {
     PkgClass.BASE: "基础包，删除会破坏系统（dpkg/apt/bash 一类）",
     PkgClass.LIBRARY: "库/依赖，由软件自动管理，不应单独删除",
     PkgClass.SYSTEM: "系统组件，未通过“用户软件”判定，不给删",
-    PkgClass.FILE: "散落包文件，不是已安装记录 —— 用 `pkgtool clean -k loose` 删除",
+    PkgClass.FILE: "散落包文件，不是已安装记录 —— 在列表里按 r 删除"
+                   "（T 可切回收站），或用 `pkgtool clean -k loose`",
 }
 
 # 表格用的短标签（CHANNEL_LABEL/ORIGIN_LABEL 是给详情页用的完整文案）
@@ -70,7 +72,8 @@ CLEAN_KIND_LABEL = {
     "apt-cache": "apt 下载缓存",
     "snap-rev": "snap 旧修订",
     "flatpak-unused": "flatpak 无用运行时",
-    "pip-cache": "pip 缓存",
+    "linyap-unused": "玲珑未引用运行时",
+    "user-cache": "用户缓存",
     "conda-cache": "conda 包缓存",
 }
 
@@ -179,6 +182,8 @@ def update_advice(rec):
     if t.startswith("flatpak"):
         scope = "--user " if rec.extra.get("installation") == "user" else ""
         return f"flathub 推送；手动：flatpak update {scope}{n}"
+    if t == "linyap":
+        return f"玲珑仓库推送；手动：sudo ll-cli upgrade {n}"
     if t == "deb":
         if rec.upgradable:
             return (f"apt 源管理，可升级 {rec.version} → {rec.candidate}："

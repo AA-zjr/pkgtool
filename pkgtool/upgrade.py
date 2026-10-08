@@ -21,6 +21,8 @@ def plan(rec):
         user = rec.extra.get("installation") == "user"
         argv = ["flatpak", "update", "-y"] + (["--user"] if user else []) + [n]
         return argv, not user          # 用户级安装不需要 root
+    if t == "linyap":
+        return ["ll-cli", "upgrade", n], True   # 系统仓库，需要 root
     return None
 
 

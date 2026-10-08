@@ -57,11 +57,12 @@ def _target(rec):
 
 def _residue_roots(rec, cfg):
     """残留扫描范围。
-    受包管理器管理的格式（deb/snap/flatpak）只扫主目录：卸载命令自己会删掉它
-    装进系统目录的文件，再把 /opt/wechat 当"残留"rm -rf 一遍是重复计数，
-    还会把包本体的体积算进"可回收空间"误导用户（实测 755MB）。
+    受包管理器管理的格式（deb/snap/flatpak/linyap）只扫主目录：卸载命令
+    自己会删掉它装进系统目录的文件，再把 /opt/wechat 当"残留"rm -rf 一遍
+    是重复计数，还会把包本体的体积算进"可回收空间"误导用户（实测 755MB）。
     只有 AppImage 这种没人管的文件才需要连系统目录一起扫。"""
-    managed = rec.pkg_type in ("deb", "snap") or rec.pkg_type.startswith("flatpak")
+    managed = (rec.pkg_type in ("deb", "snap", "linyap")
+               or rec.pkg_type.startswith("flatpak"))
     return cfg.residue_home_roots if managed else cfg.residue_roots
 
 
@@ -100,10 +101,14 @@ def _matches(entry, exact_ids, prefix_ids, min_len):
 
 def _is_protected(path, cfg):
     """包管理器自己的数据根（如用户级 flatpak 安装目录）绝不当残留删：
-    里面装的是应用本体，不是配置缓存。删掉等于清空所有用户级 flatpak。"""
+    里面装的是应用本体，不是配置缓存。删掉等于清空所有用户级 flatpak。
+    用户级 flatpak 目录随 XDG_DATA_HOME 走，单独比对，不能只靠
+    residue_protected 里的字面相对路径。"""
     home = os.path.abspath(cfg.home)
     target = os.path.abspath(path)
-    return any(target == os.path.join(home, p) for p in cfg.residue_protected)
+    protected = {os.path.join(home, p) for p in cfg.residue_protected}
+    protected.add(os.path.abspath(cfg.flatpak_user_dir))
+    return target in protected
 
 
 def find_residues(rec, cfg=CFG):
@@ -206,6 +211,15 @@ def _flatpak_steps(rec, target, purge_residues):
     return argv + [target], user
 
 
+def _linyap_steps(rec, target):
+    """玲珑卸载只删应用层；卸载后残留的未引用 base/runtime 由
+    `ll-cli prune` 处理（磁盘回收里的「玲珑未引用运行时」条目）。"""
+    argv = ["ll-cli", "uninstall"]
+    if rec.extra.get("module") and rec.extra["module"] != "binary":
+        argv.append(f"--module={rec.extra['module']}")
+    return [argv + [target]]
+
+
 def preview(rec, purge_residues=False, autoremove=True, cfg=CFG):
     """dry-run + 残留扫描（无需 root）→ Plan。非 APP 类直接拒绝。"""
     if not is_removable(rec):
@@ -226,6 +240,8 @@ def preview(rec, purge_residues=False, autoremove=True, cfg=CFG):
     elif t.startswith("flatpak"):
         argv, user = _flatpak_steps(rec, target, purge_residues)
         (plain_steps if user else steps).append(argv)
+    elif t == "linyap":
+        steps = _linyap_steps(rec, target)
     elif t == "appimage":
         steps = []
     else:

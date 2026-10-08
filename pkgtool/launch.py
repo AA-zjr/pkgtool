@@ -25,21 +25,22 @@ _FIELD_CODE_RE = re.compile(r"%[a-zA-Z]")
 
 
 def _xdg_app_dirs(cfg):
-    """desktop 文件的查找目录：XDG_DATA_DIRS + 用户目录。"""
-    xdg = os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share")
-    dirs = [os.path.join(d, "applications") for d in xdg.split(":") if d]
-    dirs.append(os.path.join(cfg.home, ".local", "share", "applications"))
+    """desktop 文件的查找目录：XDG_DATA_DIRS + 用户目录（XDG_DATA_HOME）。"""
+    dirs = [os.path.join(d, "applications") for d in cfg.xdg_data_dirs]
+    dirs.append(os.path.join(cfg.xdg_data_home, "applications"))
     return dirs
 
 
 def _parse_exec(line):
-    """解析 Exec= → argv。去掉 %f/%U 一类字段码（按 desktop-entry 规范，
-    它们是给文件管理器传参的占位符，直接启动不该带上）。"""
+    """解析 Exec= → argv。按 desktop-entry 规范去掉 %f/%U 一类字段码
+    （它们是给文件管理器传参的占位符，直接启动不该带上），%% 转义回
+    字面 %。解析失败（引号不配对等）返回空列表，调用方退到下一来源。"""
     try:
         parts = shlex.split(line)
     except ValueError:
         return []
-    return [t for t in parts if not _FIELD_CODE_RE.fullmatch(t)]
+    return [t.replace("%%", "%")
+            for t in parts if not _FIELD_CODE_RE.fullmatch(t)]
 
 
 def _desktop_argv(rec, cfg):
@@ -81,19 +82,17 @@ def _desktop_argv(rec, cfg):
 
 def _pick_exe(rec):
     """从记录的可执行文件里挑最像"应用入口"的那个。
-    desktop_id 往往就是主命令名（org.example.Foo 例外，见前缀兜底），
-    以它或包名为准精确匹配，再退到前缀（firefox-esr 之于 firefox），
-    最后才取第一个——bin_dirs 是字母序，第一个通常是主程序。"""
+    优先级：desktop_id 精确 > 包名精确 > 前缀（firefox-esr 之于 firefox）
+    > 第一个——desktop_id 是软件作者声明的应用标识，比包名更能代表入口。"""
     exes = rec.executables
     if not exes:
         return ""
-    names = {rec.name}
     did = rec.extra.get("desktop_id")
-    if did:
-        names.add(did)
-    for e in exes:
-        if os.path.basename(e) in names:
-            return e
+    names = [n for n in (did, rec.name) if n]
+    for n in names:
+        for e in exes:
+            if os.path.basename(e) == n:
+                return e
     for e in exes:
         base = os.path.basename(e)
         if any(base.startswith(n) for n in names if len(n) >= 3):
@@ -125,8 +124,13 @@ def plan(rec, cfg=CFG):
                 and shutil.which("flatpak"):
             return ["flatpak", "run", rec.name]
         return None
+    if t == "linyap":
+        if rec.extra.get("kind", "app") in ("app", "") and shutil.which("ll-cli"):
+            return ["ll-cli", "run", rec.name]
+        return None
     if t == "appimage":
-        path = rec.extra.get("found_at") or rec.install_path
+        path = rec.extra.get("found_at") or rec.extra.get("loose") \
+            or rec.install_path
         if path and os.path.exists(path):
             return [path]
         return None

@@ -1,10 +1,7 @@
 """pkgtool.app — 交互式主界面（裸跑 `pkgtool` 进入）。
 
-五个视图，Tab 或数字键切换：
-  1 全部包  2 本地自装  3 可升级  4 散落包文件  5 仓库搜索
-
-磁盘回收不占标签位：按 C 进入（再按 C 或 Tab 返回），散落包文件在
-视图 4 里就能直接删。
+六个视图，Tab 或数字键切换：
+  1 全部包  2 本地自装  3 可升级  4 散落包文件  5 仓库搜索  6 磁盘回收
 
 本文件只有界面与状态机，业务规则一律走既有各层：inventory 取数、classify 判定、
 remove / clean / upgrade / actions 执行、labels / report 出文案。这样交互界面和
@@ -25,13 +22,11 @@ from .apt import actions, lists
 from .config import CFG
 from .report import pad, truncate
 
-VIEWS = ("全部包", "本地自装", "可升级", "散落包文件", "仓库搜索")
-_LIST, _LOCAL, _UPGRADABLE, _LOOSE, _SEARCH = range(len(VIEWS))
-# 磁盘回收不占标签位：C 键切换进出（set_view 直接给索引）
-_CLEAN = len(VIEWS)
+VIEWS = ("全部包", "本地自装", "可升级", "散落包文件", "仓库搜索", "磁盘回收")
+_LIST, _LOCAL, _UPGRADABLE, _LOOSE, _SEARCH, _CLEAN = range(len(VIEWS))
 _SEARCH_LIMIT = 80
 # t 键循环的包类型；flatpak 一项同时覆盖 flatpak 与 flatpak-runtime
-_TYPE_CYCLE = ("all", "deb", "snap", "flatpak", "appimage")
+_TYPE_CYCLE = ("all", "deb", "snap", "flatpak", "linyap", "appimage")
 # 仓库搜索视图里 s 键循环的目录来源（见 catalog.py）
 _SOURCE_CYCLE = ("all", "apt", "snap", "flatpak")
 _SOURCE_LABEL = {"all": "全部来源", "apt": "apt 源", "snap": "Snap Store",
@@ -41,8 +36,7 @@ _HELP = """按键一览
 
   浏览
     ↑ ↓ / k j         上下移动          PgUp PgDn   翻页
-    g  G              跳到开头 / 结尾    Tab / 1-5   切换视图
-    C                 磁盘回收（不占标签位，再按 C 返回）
+    g  G              跳到开头 / 结尾    Tab / 1-6   切换视图
     /                 搜索 / 过滤（apt 搜索视图里就是查询词）
     t                 包类型筛选：全部 → deb → snap → flatpak → appimage
     s                 显示 / 隐藏系统预装与自动依赖
@@ -52,13 +46,13 @@ _HELP = """按键一览
   对选中的包
     Enter             查看详情           r           卸载（散落文件则是删除，先确认）
     u                 升级               d           下载 .deb（仅 deb，不需 root）
-    o                 启动应用（分离启动，不阻塞本界面；
-                      仓库/数据/元包类没有入口，不能启动）
+    o                 启动应用（分离启动，不阻塞本界面）
+    （r/o/u/d/T 只在适用的条目上出现；不适用的按键按了没反应）
 
-  磁盘回收（按 C 进入）
+  磁盘回收视图（散落文件、用户缓存 ~/.cache、flatpak 应用缓存、
+  apt 下载缓存、snap 旧修订、flatpak 无用运行时、conda 包缓存）
     Enter             删除当前项         空格        标记 / 取消标记
     x                 删除全部标记项      T           切换「移入回收站 / 真删」
-    C / Tab           返回包视图
 
   仓库搜索视图（apt 源 / Snap Store / flathub 三源）
     /                 输入关键词         s           切换来源（全部/apt/snap/flatpak）
@@ -124,7 +118,7 @@ class App:
         self.cfg = cfg
         self.inv = inv
         self.view = _LIST
-        self.filter = {i: "" for i in range(len(VIEWS) + 1)}   # 含隐藏的磁盘回收
+        self.filter = {i: "" for i in range(len(VIEWS))}
         self.show_system = False
         self.ptype = "all"             # 包类型筛选，t 键循环
         self.source = "all"            # 仓库搜索的来源筛选，s 键循环
@@ -159,6 +153,32 @@ class App:
 
     def current(self):
         return self.lv.current
+
+    def _sel_rec(self):
+        it = self.current()
+        if it and it.kind == "pkg" and it.data is not None:
+            return it.data
+        return None
+
+    def _rec_hints(self, rec, detail=False):
+        """按选中记录的实际能力出提示：不适用的按键不显示（按了也没反应），
+        而不是摆在那里等用户按了吃报错。"""
+        bits = []
+        if rec.is_loose_file:
+            bits.append("r 删除")
+        elif classify.is_removable(rec):
+            bits.append("r 卸载")
+        if launch.plan(rec):
+            bits.append("o 启动")
+        if not rec.is_loose_file and upgrade.plan(rec):
+            bits.append("u 升级")
+        if rec.pkg_type == "deb" and not rec.is_loose_file:
+            bits.append("d 下载")
+        if rec.is_loose_file:
+            bits.append("T 回收站")
+        if detail:
+            bits += ["↑↓ 滚动", "q 返回列表"]
+        return bits
 
     def _pkg_item(self, r):
         up = " ↑" if r.upgradable else ""
@@ -291,13 +311,6 @@ class App:
         self.rebuild()
         self.msg = f"已重新采集 {len(self.inv.records)} 条 @ {self.inv.collected_at}"
 
-    def _drop_names(self, names):
-        """卸载成功后就地摘掉记录，省一次全量重采。"""
-        names = set(names)
-        self.inv.records = [r for r in self.inv.records if r.name not in names]
-        self.inv.by_key = {k: v for k, v in self.inv.by_key.items()
-                           if v.name not in names}
-
     def _bump(self, rec):
         if rec.candidate:
             rec.version, rec.candidate = rec.candidate, ""
@@ -366,8 +379,12 @@ class App:
             el = " ".join(f"{k}{v}s" for k, v in catalog.LAST_ELAPSED.items())
             if el:
                 bits.append(el)
-        if self.view == _CLEAN or (self.view == _LOOSE and self.trash):
-            bits.append("回收站模式" if self.trash else "真删模式")
+        if self.view == _CLEAN:
+            sized = sum(i.data.size_mb for i in self.items
+                        if i.kind == "target" and i.data is not None
+                        and i.data.size_known)
+            if sized:
+                bits.append("可回收 " + labels.size_text(round(sized, 1)))
         return bits
 
     def _draw_detail(self, scr, y0, body_h, w):
@@ -385,19 +402,37 @@ class App:
     def _hints(self):
         if self.mode == "detail":
             if self.detail_item:
-                return ("i 安装 · d 下载 .deb（仅 apt）· ↑↓ 滚动 · q 返回列表")
-            return "o 启动 · r 卸载 · u 升级 · d 下载 .deb · ↑↓ 滚动 · q 返回列表"
+                bits = ["i 安装"]
+                if self.detail_item.source == "apt":
+                    bits.append("d 下载")
+                bits += ["↑↓ 滚动", "q 返回列表"]
+                return " · ".join(bits)
+            if self.detail_rec:
+                return " · ".join(self._rec_hints(self.detail_rec, detail=True))
+            return "↑↓ 滚动 · q 返回列表"
         if self.view == _CLEAN:
-            return ("Enter 删除 · 空格 标记 · x 删标记 · T 切回收站 · C 返回 · "
-                    "/ 过滤 · ? 帮助 · q 退出")
-        if self.view in (_LIST, _LOCAL, _UPGRADABLE, _LOOSE):
-            return ("Enter 详情 · r 卸载/删除 · o 启动 · u 升级 · d 下载 · "
-                    "/ 搜索 · t 类型 · s 含系统 · T 回收站(散落) · C 磁盘回收 · "
-                    "R 重采 · ? 帮助 · q 退出")
+            return ("Enter 删除 · 空格 标记 · x 删标记 · T 切回收站 · / 过滤 · "
+                    "Tab 换视图 · ? 帮助 · q 退出")
         if self.view == _SEARCH:
-            return ("/ 搜索 · s 切来源 · Enter 详情 · i 安装 · d 下载(apt) · "
-                    "C 磁盘回收 · Tab 换视图 · ? 帮助 · q 退出")
-        return ("Enter 详情 · / 搜索 · d 下载 · R 重采 · Tab 换视图 · ? 帮助 · q 退出")
+            bits = ["/ 搜索", "s 切来源"]
+            it = self.current()
+            if it and it.kind == "repo":
+                bits += ["Enter 详情", "i 安装"]
+                if it.data.source == "apt":
+                    bits.append("d 下载")
+            bits += ["? 帮助", "q 退出"]
+            return " · ".join(bits)
+        if self.view in (_LIST, _LOCAL, _UPGRADABLE, _LOOSE):
+            bits = ["Enter 详情"]
+            rec = self._sel_rec()
+            if rec:
+                bits += self._rec_hints(rec)
+            bits += ["/ 搜索", "t 筛选"]
+            if self.view in (_LIST, _LOCAL):
+                bits.append("s 含系统")
+            bits += ["R 重采", "? 帮助", "q 退出"]
+            return " · ".join(bits)
+        return "? 帮助 · q 退出"
 
     # ---------- 详情 ----------
 
@@ -457,15 +492,27 @@ class App:
                 _pause()
                 return False
             res = remove.execute(plan, on_line=print, cfg=self.cfg)
-            print("✓ 卸载完成" if res.ok else f"✗ 失败：{res.error}")
-            _pause()
-            return res.ok
+            print("✓ 卸载完成" if res.ok else f"✗ 命令报错：{res.error}")
+            # 卸载后立即重采：flatpak 偶发"命令报错但实际已卸掉"，就地摘记录
+            # 不可靠，重采结果才是事实。本来就已在终端模式里，顺手做掉。
+            print("\n重新采集中…")
+            box["inv"] = inventory.collect(
+                self.cfg, on_backend=lambda t, n, e, err: print(
+                    f"  [{t}] {n} 个 ({e:.1f}s)" + (f"  失败: {err}" if err else "")))
+            return True
 
-        if scr.run_external(go):
-            self._drop_names(box["plan"].will_remove)
+        out = scr.run_external(go)
+        if out:
+            res_ok, gone = True, True
+            if "inv" in box:
+                new_inv = box["inv"]
+                self.inv = new_inv
+                gone = new_inv.by_key.get(rec.key) is None
             self.close_detail()
             self.rebuild()
-            self.msg = f"已卸载 {rec.name}"
+            self.msg = (f"已卸载 {rec.name}" if res_ok else
+                        f"{rec.name} 卸载命令报错，已重采核实："
+                        + ("确认已卸载" if gone else "记录仍在，未卸载"))
 
     def act_upgrade(self, scr, rec):
         def go():
@@ -662,14 +709,17 @@ def _main(std, cfg, inv):
                 app.scroll = 0
             elif kind == "char" and val == "G":
                 app.scroll = len(app.detail_lines)
-            elif kind == "char" and val == "o" and app.detail_rec:
+            elif kind == "char" and val == "o" and app.detail_rec \
+                    and launch.plan(app.detail_rec):
                 app.act_open(app.detail_rec)
             elif kind == "char" and val == "r" and app.detail_rec:
                 if app.detail_rec.is_loose_file:
                     app.act_delete_loose(scr, app.detail_rec)
-                else:
+                elif classify.is_removable(app.detail_rec):
                     app.act_remove(scr, app.detail_rec)
-            elif kind == "char" and val == "u" and app.detail_rec:
+            elif kind == "char" and val == "u" and app.detail_rec \
+                    and not app.detail_rec.is_loose_file \
+                    and upgrade.plan(app.detail_rec):
                 app.act_upgrade(scr, app.detail_rec)
             elif kind == "char" and val == "i" and app.detail_item:
                 app.act_install_item(scr, app.detail_item)
@@ -678,13 +728,10 @@ def _main(std, cfg, inv):
                     if app.detail_item.source == "apt":
                         app.act_download(scr, app.detail_item.name,
                                          app.detail_item.version)
-                    else:
-                        app.msg = "只有 apt 源的包能单独下载 .deb"
-                elif app.detail_rec and app.detail_rec.pkg_type == "deb":
+                elif app.detail_rec and app.detail_rec.pkg_type == "deb" \
+                        and not app.detail_rec.is_loose_file:
                     app.act_download(scr, app.detail_rec.name,
                                      app.detail_rec.candidate)
-                else:
-                    app.msg = "只有 deb 包能下载 .deb 文件"
             continue
 
         if tui.is_quit(kind, val):
@@ -709,13 +756,10 @@ def _main(std, cfg, inv):
         if kind == "char" and val == "R":
             app.reload(scr)
             continue
-        if kind == "char" and val == "C":
-            # 磁盘回收不占标签位：C 进出（里面的 T/空格/x/Enter 照常工作）
-            app.set_view(_LIST if app.view == _CLEAN else _CLEAN)
-            app.msg = ("磁盘回收：Enter 删除当前项 · 空格 标记 · x 删标记 · "
-                       "C/Tab 返回" if app.view == _CLEAN else "已返回包视图")
-            continue
-        if kind == "char" and val == "T" and app.view in (_CLEAN, _LOOSE):
+        cur = app.current()
+        if kind == "char" and val == "T" and (
+                app.view in (_CLEAN, _LOOSE)
+                or (cur and cur.kind == "pkg" and cur.data.is_loose_file)):
             app.trash = not app.trash
             app.msg = ("删除方式：移入回收站（可还原）" if app.trash
                        else "删除方式：真删")
@@ -742,41 +786,36 @@ def _main(std, cfg, inv):
             continue
         if kind == "char" and val == "o":
             it = app.current()
-            if it and it.kind == "pkg":
+            if it and it.kind == "pkg" and launch.plan(it.data):
                 app.act_open(it.data)
-            else:
-                app.msg = "启动只对已安装的包有效"
             continue
         if kind == "char" and val == "r":
             it = app.current()
-            if it and it.kind == "pkg" and not it.data.is_loose_file:
-                app.act_remove(scr, it.data)
-            elif it and it.kind == "pkg":
-                app.act_delete_loose(scr, it.data)
+            if it and it.kind == "pkg":
+                if it.data.is_loose_file:
+                    app.act_delete_loose(scr, it.data)
+                elif classify.is_removable(it.data):
+                    app.act_remove(scr, it.data)
             continue
         if kind == "char" and val == "u":
             it = app.current()
-            if it and it.kind == "pkg":
+            if it and it.kind == "pkg" and not it.data.is_loose_file \
+                    and upgrade.plan(it.data):
                 app.act_upgrade(scr, it.data)
             continue
         if kind == "char" and val == "i":
             it = app.current()
             if it and it.kind == "repo":
                 app.act_install_item(scr, it.data)
-            else:
-                app.msg = "安装只在「仓库搜索」视图里可用"
             continue
         if kind == "char" and val == "d":
             it = app.current()
             if it and it.kind == "repo":
                 if it.data.source == "apt":
                     app.act_download(scr, it.data.name, it.data.version)
-                else:
-                    app.msg = "只有 apt 源的包能单独下载 .deb"
-            elif it and it.kind == "pkg" and it.data.pkg_type == "deb":
+            elif it and it.kind == "pkg" and it.data.pkg_type == "deb" \
+                    and not it.data.is_loose_file:
                 app.act_download(scr, it.data.name, it.data.candidate)
-            else:
-                app.msg = "只有 deb 包能下载 .deb 文件"
             continue
         if _nav(app, kind, val):
             continue

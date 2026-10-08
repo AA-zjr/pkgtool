@@ -106,7 +106,7 @@ def _fill_flatpak_updates(by_key, cfg):
 
 
 _TYPE_ORDER = {"deb": 0, "snap": 1, "flatpak": 2, "flatpak-runtime": 3,
-               "appimage": 4}
+               "linyap": 4, "appimage": 5}
 
 
 def _sort_key(rec):

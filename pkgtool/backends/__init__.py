@@ -8,9 +8,11 @@ from ..config import CFG
 from .appimage import AppImageBackend
 from .deb import DebBackend
 from .flatpak import FlatpakBackend
+from .linyap import LinyapBackend
 from .snap import SnapBackend
 
-BACKENDS = (DebBackend, SnapBackend, FlatpakBackend, AppImageBackend)
+BACKENDS = (DebBackend, SnapBackend, FlatpakBackend, LinyapBackend,
+            AppImageBackend)
 
 
 def available_backends(cfg=CFG):
@@ -24,4 +26,5 @@ def discover(cfg=CFG):
 
 
 __all__ = ["BACKENDS", "Backend", "available_backends", "discover",
-           "DebBackend", "SnapBackend", "FlatpakBackend", "AppImageBackend"]
+           "DebBackend", "SnapBackend", "FlatpakBackend", "LinyapBackend",
+           "AppImageBackend"]

@@ -14,7 +14,7 @@ from .apt import actions, lists
 from .config import CFG
 from .remove import execute, preview
 
-_TYPES = ("deb", "snap", "flatpak", "appimage")
+_TYPES = ("deb", "snap", "flatpak", "linyap", "appimage")
 
 
 def _err(msg):
@@ -437,8 +437,8 @@ def build_parser():
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_remove)
 
-    p = sub.add_parser("clean", help="磁盘回收：散落包文件、apt/pip/conda 缓存、"
-                                     "snap 旧修订、flatpak 无用运行时")
+    p = sub.add_parser("clean", help="磁盘回收：散落包文件、用户缓存（~/.cache 等）、"
+                                     "apt/conda 缓存、snap 旧修订、flatpak/玲珑未引用运行时")
     p.add_argument("-k", "--kind", action="append", choices=clean.KINDS,
                    help="只处理某类目标（可重复给多次；默认全部）")
     p.add_argument("--min-size", type=float, default=0.0, metavar="MB",

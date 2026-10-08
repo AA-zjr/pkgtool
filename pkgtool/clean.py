@@ -1,15 +1,22 @@
 """pkgtool.clean — 跨格式磁盘回收：扫描可清理目标 + 执行删除。
 
 六类目标。能用官方清理命令的一律用官方命令——它们知道自己该删什么、不会
-破坏自己的元数据；只有"磁盘上的散落包文件"和"主目录下的纯缓存目录"才由
+破坏自己的元数据；只有"磁盘上的散落包文件"和"用户缓存目录"才由
 本工具直接删：
 
   loose           散落 .deb / .AppImage      直接删文件（主目录内不需要 root）
   apt-cache       /var/cache/apt/archives    apt-get clean
   snap-rev        非激活的旧修订             snap remove <name> --revision <rev>
   flatpak-unused  没有应用引用的运行时        flatpak uninstall --unused -y
-  pip-cache       ~/.cache/pip               直接删目录（纯缓存，重新下载即可）
+  linyap-unused   玲珑未引用的 base/runtime   ll-cli prune（卸载应用后会残留）
+  user-cache      ~/.cache 等用户缓存        直接删目录（XDG 规范：可再生的
+                                             非必要数据，逐个顶层目录列出）
   conda-cache     <conda 根>/pkgs            conda clean -a -y
+
+user-cache 的安全性依据：XDG 规范把 cache 目录定义为"可随时再生的非必要
+数据"，应用的会话、凭据、配置都在 ~/.config / ~/.local，删缓存碰不到；
+flatpak 沙盒应用的同位缓存（~/.var/app/*/cache）同理。小于
+cache_min_mb 的条目不列，避免几百条 KB 级噪音淹没列表。
 
 conda 的 pkgs 目录大量用硬链接（解包后的文件被链接进各环境），按文件体积
 累加会高估可回收空间（实测 1.45 GB vs du 的 1.1 GB），所以只统计压缩包部分。
@@ -26,8 +33,8 @@ from .base import delete_paths, file_size_mb, is_safe_name, is_under_home
 from .config import CFG
 from .labels import loose_state, size_text
 
-KINDS = ("loose", "apt-cache", "snap-rev", "flatpak-unused", "pip-cache",
-         "conda-cache")
+KINDS = ("loose", "apt-cache", "snap-rev", "flatpak-unused", "linyap-unused",
+         "user-cache", "conda-cache")
 
 
 @dataclass
@@ -122,13 +129,42 @@ def _flatpak_unused(inv, cfg):
                    privileged=True, note="体积要执行后才知道")]
 
 
-def _pip_cache(inv, cfg):
-    p = cfg.pip_cache_path
-    if not os.path.isdir(p):
+def _linyap_unused(inv, cfg):
+    """玲珑卸载应用后残留的未引用 base/runtime（ll-cli prune 专清这个）。
+    体积只有执行后才知道。"""
+    if not shutil.which("ll-cli"):
         return []
-    return [Target(kind="pip-cache", label="", detail=p,
-                   size_mb=file_size_mb(p), paths=[p],
-                   note="纯缓存，删掉只会让下次安装重新下载")]
+    return [Target(kind="linyap-unused", label="",
+                   detail="ll-cli prune：移除未被任何应用引用的基础环境/运行时",
+                   size_known=False, argv=["ll-cli", "prune"],
+                   privileged=True, note="体积要执行后才知道")]
+
+
+def _user_cache(inv, cfg):
+    """~/.cache 与 flatpak 沙盒应用缓存（~/.var/app/*/cache）下的顶层目录。
+    每个目录单独一条，用户可以只挑不要的删；小于 cfg.cache_min_mb 的不列。"""
+    roots = [cfg.xdg_cache_home]
+    var_app = cfg.flatpak_sandbox_home
+    if os.path.isdir(var_app):
+        for app in sorted(os.listdir(var_app)):
+            p = os.path.join(var_app, app, "cache")
+            if os.path.isdir(p):
+                roots.append(p)
+    out = []
+    for root in roots:
+        try:
+            entries = os.listdir(root)
+        except OSError:
+            continue
+        for e in sorted(entries):
+            path = os.path.join(root, e)
+            size = file_size_mb(path)
+            if size < cfg.cache_min_mb:
+                continue
+            out.append(Target(kind="user-cache", label=e, detail=path,
+                              size_mb=size, paths=[path],
+                              note="可再生缓存，会话与配置不受影响"))
+    return out
 
 
 def _conda_cache(inv, cfg):
@@ -159,7 +195,8 @@ def _conda_cache(inv, cfg):
 
 COLLECTORS = (("loose", _loose), ("apt-cache", _apt_cache),
               ("snap-rev", _snap_revisions), ("flatpak-unused", _flatpak_unused),
-              ("pip-cache", _pip_cache), ("conda-cache", _conda_cache))
+              ("linyap-unused", _linyap_unused),
+              ("user-cache", _user_cache), ("conda-cache", _conda_cache))
 
 
 def collect_targets(cfg=CFG, kinds=None, inv=None, min_size_mb=0.0):

@@ -48,6 +48,8 @@ def classify(rec, index=None):
         return _snap(rec)
     if t.startswith("flatpak"):
         return _flatpak(rec)
+    if t == "linyap":
+        return _linyap(rec)
     if t == "appimage":
         return PkgClass.APP, "便携应用（用户自行安置）"
     return PkgClass.SYSTEM, f"未知包类型 {t}，保守拒绝"
@@ -104,6 +106,13 @@ def _flatpak(rec):
     return PkgClass.APP, "flatpak 应用"
 
 
+def _linyap(rec):
+    # base 层的 kind 也是 "runtime"，不看名字只看 kind
+    if rec.extra.get("kind") in ("runtime", "base"):
+        return PkgClass.LIBRARY, "玲珑运行时/基础环境（被应用引用，不单独卸载）"
+    return PkgClass.APP, "玲珑应用"
+
+
 def is_removable(rec):
     return rec.pkg_class is PkgClass.APP
 
@@ -130,6 +139,8 @@ def is_user_installed(rec):
                 or rec.channel in (Channel.DPKG_LOCAL, Channel.APT_LOCAL))
     if t == "appimage":
         return True                     # 已安置的便携应用（散落文件上面已排除）
+    if t == "linyap":
+        return rec.extra.get("kind", "app") == "app"   # 运行时不算
     if t.endswith("-runtime"):
         return False
     return rec.origin_kind is OriginKind.LOCAL

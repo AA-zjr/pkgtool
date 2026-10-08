@@ -63,14 +63,20 @@ class CatalogItem:
 
 
 def _run(argv, cfg, timeout=None):
-    """跑一个查询命令，返回 stdout 行列表；任何失败都返回 []（搜索不该抛异常）。"""
+    """跑一个查询命令 → (stdout 行列表, 失败原因)。
+    任何失败都转成空结果 + 错误串（搜索不该抛异常），调用方借此区分
+    "确实没搜到"和"查询失败"——snapd 忙碌时 snap find 会失败，静默吞掉
+    会让用户把"查询挂了"当成"商店里没有"。"""
     try:
         p = subprocess.run(argv, capture_output=True, text=True,
                            timeout=timeout or cfg.timeout_catalog,
                            env=dict(os.environ, **_C_ENV))
-    except (OSError, subprocess.SubprocessError):
-        return []
-    return p.stdout.splitlines() if p.returncode == 0 else []
+    except (OSError, subprocess.SubprocessError) as e:
+        return [], f"{type(e).__name__}: {e}"
+    if p.returncode != 0:
+        tail = [ln for ln in (p.stderr or "").splitlines() if ln.strip()]
+        return [], tail[-1][:200] if tail else f"退出码 {p.returncode}"
+    return p.stdout.splitlines(), ""
 
 
 # ---------- 各来源 ----------
@@ -97,7 +103,9 @@ def _search_snap(q, limit, cfg):
         hit = _SNAP_CACHE.get(q)
         if hit and now - hit[0] < cfg.catalog_cache_ttl:
             return hit[1][:limit]
-    lines = _run(["snap", "find", q], cfg)
+    lines, err = _run(["snap", "find", q], cfg)
+    if not lines and err:
+        LAST_ERRORS.append(f"snap: {err}")       # 查询失败要让人看见
     out = []
     for i, line in enumerate(lines):
         f = _SNAP_SPLIT_RE.split(line.strip())
@@ -120,7 +128,8 @@ def flatpak_remote_urls(cfg=CFG, user=False):
     系统级配的 remote 对 --user 安装不可见，这两套是各自独立的配置。"""
     scope = "--user" if user else "--system"
     out = {}
-    for line in _run(["flatpak", "remotes", scope, "--columns=name,url"], cfg):
+    lines, _err = _run(["flatpak", "remotes", scope, "--columns=name,url"], cfg)
+    for line in lines:
         f = line.split("\t")
         if len(f) >= 2 and f[0].strip():
             out[f[0].strip()] = f[1].strip()
@@ -162,8 +171,9 @@ def _flatpak_catalog(cfg):
     out, seen = [], set()
     for scope, is_user in (("--system", False), ("--user", True)):
         for remote in flatpak_remote_urls(cfg, user=is_user):
-            for line in _run(["flatpak", "remote-ls", "--app", scope,
-                              f"--columns={_FLATPAK_COLUMNS}", remote], cfg):
+            lines, _err = _run(["flatpak", "remote-ls", "--app", scope,
+                                f"--columns={_FLATPAK_COLUMNS}", remote], cfg)
+            for line in lines:
                 f = line.split("\t")
                 if len(f) < 4 or not f[1] or f[1] in seen:
                     continue
@@ -327,7 +337,7 @@ def describe(item, cfg=CFG):
         info = lists.load_index(cfg).info(item.name)
         return report.render_versions(info) if info else "仓库中无此包"
     if item.source == "snap":
-        lines = _run(["snap", "info", item.name], cfg)
+        lines, _err = _run(["snap", "info", item.name], cfg)
         return "\n".join(lines) if lines else "（snap info 无输出）"
     bits = [("app-id", item.name), ("显示名", item.display),
             ("remote", item.remote), ("branch", item.channel),
