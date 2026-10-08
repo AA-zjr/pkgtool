@@ -113,15 +113,15 @@ def _sort_key(rec):
     return (_TYPE_ORDER.get(rec.pkg_type, 9), rec.name.lower(), rec.variant)
 
 
-def select(inv, pkg_type=None, query=None, only_local=False, show_system=False,
+def select(inv, pkg_type=None, query=None, only_local=False, level=0,
            only_removable=False, only_upgradable=False, loose=None):
-    """按条件筛选记录。全项目唯一的过滤实现——原先 Web UI 的 visible()、
-    pkg_inventory.py 和 deb_inventory.py 各写了一份，规则还不完全一致。"""
+    """按条件筛选记录。全项目唯一的过滤实现。
+
+    level 是披露层级（见 classify.visibility_level）：0=仅用户可用的软件，
+    1=+库/数据/散落文件，2=全部。散落视图（loose=True）不受层级约束，
+    那里本来就是专门看散落文件的。
+    """
     q = (query or "").lower().strip()
-    # 可升级与"是否系统组件"是两个正交维度：只列可升级项时不再隐藏系统包，
-    # 否则 base-files / libc6 这些最该升级的反而看不见（apt list --upgradable 也全列）。
-    # 规则放在这里，CLI 与交互界面才会给出同一份结果。
-    hide_system = not show_system and not only_upgradable
     out = []
     for rec in inv.records:
         if pkg_type and pkg_type != "all":
@@ -129,9 +129,9 @@ def select(inv, pkg_type=None, query=None, only_local=False, show_system=False,
             if not (rec.pkg_type == pkg_type
                     or (pkg_type == "flatpak" and rec.pkg_type.startswith("flatpak"))):
                 continue
-        if loose is not None and rec.is_loose_file != loose:
+        if loose is not True and classify.visibility_level(rec) > level:
             continue
-        if hide_system and classify.is_system_component(rec):
+        if loose is not None and rec.is_loose_file != loose:
             continue
         if only_local and not classify.is_user_installed(rec):
             continue
@@ -154,9 +154,9 @@ def _matches(rec, q):
     return q in hay
 
 
-def hide_count(inv):
-    """默认视图隐藏了多少条（系统预装 + 自动依赖）。"""
-    return sum(1 for r in inv.records if classify.is_system_component(r))
+def hide_count(inv, level=0):
+    """当前披露层级下隐藏了多少条（层级 0 时即"非软件"的总数）。"""
+    return sum(1 for r in inv.records if classify.visibility_level(r) > level)
 
 
 def upgradable(inv):

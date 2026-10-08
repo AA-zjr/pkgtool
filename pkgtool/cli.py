@@ -86,7 +86,7 @@ def _resolve(inv, name, pkg_type=None):
 def cmd_list(args):
     inv = _collect(args)
     recs = inventory.select(inv, pkg_type=args.type, query=args.query,
-                            only_local=args.local, show_system=args.all,
+                            only_local=args.local, level=2 if args.all else 0,
                             only_removable=args.removable,
                             only_upgradable=args.upgradable,
                             loose=True if args.loose else None)
@@ -101,7 +101,8 @@ def cmd_list(args):
     elif args.loose:
         text = report.render_loose_list(recs)
     else:
-        text = report.render_list(recs, inv, show_all=args.all)
+        text = report.render_list(recs, inv, show_all=args.all,
+                                  level=2 if args.all else 0)
     return _write(text, args.output)
 
 
@@ -355,11 +356,12 @@ def build_parser():
         p.add_argument("-q", "--query", default="", help="按名字/版本/来源/路径过滤")
         p.add_argument("--local", action="store_true", help="只看用户自己装的")
         p.add_argument("--all", action="store_true",
-                       help="连系统预装与 apt 自动依赖一起显示（默认隐藏）")
+                       help="显示全部层级：软件 + 库/依赖 + 系统组件（默认只显示软件；"
+                            "分级见 classify 的披露层级）")
         p.add_argument("--removable", action="store_true", help="只看判定为“用户软件”、允许卸载的")
         p.add_argument("--upgradable", action="store_true",
-                       help="只看有新版本可升级的（隐含显示系统组件：可升级与"
-                            "是否系统包是两个维度，否则 base-files/libc6 会被藏掉）")
+                       help="只看有新版本可升级的（同样受层级过滤，libc 这类"
+                            "系统组件的升级要加 --all 才可见）")
         p.add_argument("--loose", action="store_true", help="只看磁盘上散落的包文件")
         p.add_argument("--check-updates", action="store_true",
                        help="联网查 flathub 新版（约 2 秒；deb 的可升级检测本来就离线）")

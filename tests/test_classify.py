@@ -113,13 +113,14 @@ class TestFilters(unittest.TestCase):
         self.assertTrue(classify.is_removable(rec(pkg_class=PkgClass.APP)))
         self.assertFalse(classify.is_removable(rec(pkg_class=PkgClass.LIBRARY)))
 
-    def test_system_component_hidden_rules(self):
-        self.assertTrue(classify.is_system_component(
-            rec(channel=Channel.PREINSTALLED)))
-        self.assertTrue(classify.is_system_component(
-            rec(extra={"apt_mark": "auto"})))
-        self.assertFalse(classify.is_system_component(
-            rec(pkg_type="snap", extra={})))          # 非 deb 不看 apt_mark
+    def test_visibility_levels(self):
+        # 分级披露：0=仅软件，1=+库/数据/散落文件，2=+系统/基础
+        self.assertEqual(classify.visibility_level(rec(pkg_class=PkgClass.APP)), 0)
+        self.assertEqual(classify.visibility_level(rec(pkg_class=PkgClass.FILE)), 1)
+        self.assertEqual(classify.visibility_level(rec(pkg_class=PkgClass.LIBRARY)), 1)
+        self.assertEqual(classify.visibility_level(rec(pkg_class=PkgClass.SYSTEM)), 2)
+        self.assertEqual(classify.visibility_level(rec(pkg_class=PkgClass.BASE)), 2)
+        self.assertEqual(classify.visibility_level(rec(pkg_class=None)), 2)
 
     def test_user_installed(self):
         self.assertTrue(classify.is_user_installed(

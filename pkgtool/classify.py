@@ -117,16 +117,18 @@ def is_removable(rec):
     return rec.pkg_class is PkgClass.APP
 
 
-def is_system_component(rec):
-    """默认视图要隐藏的：镜像预装 + apt 自动标记的依赖/底层库。
-    原前端用 channel.startswith('preinstalled') 判断，但 channel 已被上层覆盖，
-    这条分支实际从未生效；现在 channel 只有一个来源，判定可靠。"""
-    if rec.channel is Channel.PREINSTALLED:
-        return True
-    if rec.pkg_type != "deb":
-        return False
-    mark = rec.extra.get("apt_mark")
-    return mark == "auto" or (mark == "?" and rec.extra.get("ext_states") == "auto")
+# 默认视图的披露层级：0=仅用户可用的软件(APP)，1=+库/数据/散落文件，
+# 2=+系统/基础组件（全部）。层级看分类结论，不看 apt_mark——预装的
+# GUI 应用也是"用户可用的软件"，应该出现在默认视图里。
+VISIBILITY = {PkgClass.APP: 0, PkgClass.FILE: 1, PkgClass.LIBRARY: 1,
+              PkgClass.SYSTEM: 2, PkgClass.BASE: 2}
+
+
+def visibility_level(rec):
+    """→ 该记录在分级披露里所属的层级（默认视图只展示 0 层）。"""
+    if rec.pkg_class is None:
+        return 2                    # 未分类的保守处理：深层才显示
+    return VISIBILITY.get(rec.pkg_class, 2)
 
 
 def is_user_installed(rec):

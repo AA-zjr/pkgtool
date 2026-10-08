@@ -13,7 +13,7 @@ from enum import Enum
 
 from . import labels
 from .base import CSV_HEADER
-from .classify import is_removable, is_system_component
+from .classify import is_removable, visibility_level
 
 # ---- 终端宽度对齐（中文占两列，直接 len() 会错位）----
 
@@ -72,13 +72,14 @@ _LIST_COLUMNS = [
 ]
 
 
-def render_list(records, inv=None, show_all=False):
+def render_list(records, inv=None, show_all=False, level=0):
     parts = [render_table(records, _LIST_COLUMNS)]
     if not records:
         parts = ["  （无匹配记录）"]
     if inv is not None:
-        hidden = sum(1 for r in inv.records if is_system_component(r))
-        note = "" if show_all else f"，已隐藏 {hidden} 个系统预装/自动依赖（--all 显示）"
+        hidden = sum(1 for r in inv.records
+                     if visibility_level(r) > level)
+        note = "" if show_all else f"，已隐藏 {hidden} 个依赖/系统组件（--all 显示全部）"
         up = sum(1 for r in records if r.upgradable)
         parts.append(f"\n  显示 {len(records)} / 共 {len(inv.records)} 条{note}"
                      + (f"；其中 {up} 个可升级（↑）" if up else "")

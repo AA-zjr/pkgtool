@@ -39,7 +39,7 @@ _HELP = """按键一览
     g  G              跳到开头 / 结尾    Tab / 1-6   切换视图
     /                 搜索 / 过滤（apt 搜索视图里就是查询词）
     t                 包类型筛选：全部 → deb → snap → flatpak → appimage
-    s                 显示 / 隐藏系统预装与自动依赖
+    s                 显示层级：仅软件 → +依赖/数据 → 全部
     R                 重新采集           ?           本帮助
     q 或 Esc          退出（详情里是返回）
 
@@ -119,7 +119,7 @@ class App:
         self.inv = inv
         self.view = _LIST
         self.filter = {i: "" for i in range(len(VIEWS))}
-        self.show_system = False
+        self.level = 0                  # 披露层级：0 仅软件 → 1 +依赖 → 2 全部
         self.ptype = "all"             # 包类型筛选，t 键循环
         self.source = "all"            # 仓库搜索的来源筛选，s 键循环
         self.trash = False
@@ -206,17 +206,17 @@ class App:
 
     def _pkgs_all(self):
         return [self._pkg_item(r) for r in inventory.select(
-            self.inv, show_system=self.show_system, query=self.q,
-            pkg_type=self.ptype)]
+            self.inv, level=self.level, query=self.q, pkg_type=self.ptype)]
 
     def _pkgs_local(self):
         return [self._pkg_item(r) for r in inventory.select(
-            self.inv, only_local=True, show_system=self.show_system,
+            self.inv, only_local=True, level=self.level,
             query=self.q, pkg_type=self.ptype)]
 
     def _pkgs_upgradable(self):
         return [self._pkg_item(r) for r in inventory.select(
-            self.inv, only_upgradable=True, query=self.q, pkg_type=self.ptype)]
+            self.inv, only_upgradable=True, level=self.level,
+            query=self.q, pkg_type=self.ptype)]
 
     def _loose(self):
         recs = inventory.select(self.inv, loose=True, query=self.q,
@@ -283,6 +283,15 @@ class App:
         name = ("全部类型" if self.ptype == "all"
                 else labels.PKG_TYPE_LABEL.get(self.ptype, self.ptype))
         self.msg = f"包类型：{name} → {len(self.items)} 项"
+
+    def cycle_level(self):
+        """s 键循环披露层级：仅软件 → +依赖/数据 → 全部。
+        直接走 inventory.select 的 level 参数，与 `pkgtool list` 的 --all
+        共用一套过滤（--all 即层级 2）。"""
+        self.level = (self.level + 1) % 3
+        self.rebuild()
+        name = {0: "仅软件", 1: "软件 + 库/数据", 2: "全部（含系统/基础）"}[self.level]
+        self.msg = f"显示层级：{name} → {len(self.items)} 项"
 
     def cycle_source(self):
         """s 键（仅在仓库搜索视图）循环目录来源。
@@ -372,8 +381,8 @@ class App:
             bits.append(f"过滤 “{self.q}”")
         if self.ptype != "all":
             bits.append("类型 " + labels.PKG_TYPE_LABEL.get(self.ptype, self.ptype))
-        if self.view in (_LIST, _LOCAL) and self.show_system:
-            bits.append("含系统组件")
+        if self.view in (_LIST, _LOCAL) and self.level:
+            bits.append({1: "软件+依赖", 2: "全部层级"}[self.level])
         if self.view == _SEARCH:
             bits.append("来源 " + _SOURCE_LABEL[self.source])
             el = " ".join(f"{k}{v}s" for k, v in catalog.LAST_ELAPSED.items())
@@ -429,7 +438,7 @@ class App:
                 bits += self._rec_hints(rec)
             bits += ["/ 搜索", "t 筛选"]
             if self.view in (_LIST, _LOCAL):
-                bits.append("s 含系统")
+                bits.append("s 层级")
             bits += ["R 重采", "? 帮助", "q 退出"]
             return " · ".join(bits)
         return "? 帮助 · q 退出"
@@ -743,15 +752,12 @@ def _main(std, cfg, inv):
             app.edit_filter(scr)
             continue
         if kind == "char" and val == "s":
-            # 同一个键在搜索视图里切来源、在包视图里切"是否含系统组件"：
+            # 同一个键在搜索视图里切来源、在包视图里循环披露层级：
             # 两个语义在各自视图里都用得上，且互不冲突
             if app.view == _SEARCH:
                 app.cycle_source()
             else:
-                app.show_system = not app.show_system
-                app.rebuild()
-                app.msg = ("显示系统预装与自动依赖" if app.show_system
-                           else "隐藏系统预装与自动依赖")
+                app.cycle_level()
             continue
         if kind == "char" and val == "R":
             app.reload(scr)
