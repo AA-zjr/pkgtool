@@ -1,7 +1,10 @@
 """pkgtool.app — 交互式主界面（裸跑 `pkgtool` 进入）。
 
-六个视图，Tab 或数字键切换：
-  1 全部包  2 本地自装  3 可升级  4 散落包文件  5 磁盘回收  6 仓库搜索
+五个视图，Tab 或数字键切换：
+  1 全部包  2 本地自装  3 可升级  4 散落包文件  5 仓库搜索
+
+磁盘回收不占标签位：按 C 进入（再按 C 或 Tab 返回），散落包文件在
+视图 4 里就能直接删。
 
 本文件只有界面与状态机，业务规则一律走既有各层：inventory 取数、classify 判定、
 remove / clean / upgrade / actions 执行、labels / report 出文案。这样交互界面和
@@ -16,14 +19,16 @@ import locale
 import sys
 from dataclasses import dataclass
 
-from . import (catalog, clean, classify, inventory, labels, remove, report,
-               tui, upgrade)
+from . import (catalog, clean, classify, inventory, labels, launch, remove,
+               report, tui, upgrade)
 from .apt import actions, lists
 from .config import CFG
 from .report import pad, truncate
 
-VIEWS = ("全部包", "本地自装", "可升级", "散落包文件", "磁盘回收", "仓库搜索")
-_LIST, _LOCAL, _UPGRADABLE, _LOOSE, _CLEAN, _SEARCH = range(len(VIEWS))
+VIEWS = ("全部包", "本地自装", "可升级", "散落包文件", "仓库搜索")
+_LIST, _LOCAL, _UPGRADABLE, _LOOSE, _SEARCH = range(len(VIEWS))
+# 磁盘回收不占标签位：C 键切换进出（set_view 直接给索引）
+_CLEAN = len(VIEWS)
 _SEARCH_LIMIT = 80
 # t 键循环的包类型；flatpak 一项同时覆盖 flatpak 与 flatpak-runtime
 _TYPE_CYCLE = ("all", "deb", "snap", "flatpak", "appimage")
@@ -36,7 +41,8 @@ _HELP = """按键一览
 
   浏览
     ↑ ↓ / k j         上下移动          PgUp PgDn   翻页
-    g  G              跳到开头 / 结尾    Tab / 1-6   切换视图
+    g  G              跳到开头 / 结尾    Tab / 1-5   切换视图
+    C                 磁盘回收（不占标签位，再按 C 返回）
     /                 搜索 / 过滤（apt 搜索视图里就是查询词）
     t                 包类型筛选：全部 → deb → snap → flatpak → appimage
     s                 显示 / 隐藏系统预装与自动依赖
@@ -44,12 +50,15 @@ _HELP = """按键一览
     q 或 Esc          退出（详情里是返回）
 
   对选中的包
-    Enter             查看详情           r           卸载（先 dry-run 预览再确认）
+    Enter             查看详情           r           卸载（散落文件则是删除，先确认）
     u                 升级               d           下载 .deb（仅 deb，不需 root）
+    o                 启动应用（分离启动，不阻塞本界面；
+                      仓库/数据/元包类没有入口，不能启动）
 
-  磁盘回收视图
+  磁盘回收（按 C 进入）
     Enter             删除当前项         空格        标记 / 取消标记
     x                 删除全部标记项      T           切换「移入回收站 / 真删」
+    C / Tab           返回包视图
 
   仓库搜索视图（apt 源 / Snap Store / flathub 三源）
     /                 输入关键词         s           切换来源（全部/apt/snap/flatpak）
@@ -75,6 +84,7 @@ _HELP = """按键一览
 
 说明：需要 root 的动作由 sudo 在终端上直接提示密码，本程序不经手密码。
       卸载与清理都会先打印计划再确认；磁盘回收默认真删，按 T 可改成移入回收站。
+      散落包文件视图里 r 直接删除（主目录内默认真删，按 T 可改成移入回收站）。
 """
 
 
@@ -114,7 +124,7 @@ class App:
         self.cfg = cfg
         self.inv = inv
         self.view = _LIST
-        self.filter = {i: "" for i in range(len(VIEWS))}
+        self.filter = {i: "" for i in range(len(VIEWS) + 1)}   # 含隐藏的磁盘回收
         self.show_system = False
         self.ptype = "all"             # 包类型筛选，t 键循环
         self.source = "all"            # 仓库搜索的来源筛选，s 键循环
@@ -143,7 +153,7 @@ class App:
 
     def rebuild(self):
         builders = (self._pkgs_all, self._pkgs_local, self._pkgs_upgradable,
-                    self._loose, self._targets, self._repo_search)
+                    self._loose, self._repo_search, self._targets)
         self.items = builders[self.view]()
         self.lv.set_items(self.items)
 
@@ -356,7 +366,7 @@ class App:
             el = " ".join(f"{k}{v}s" for k, v in catalog.LAST_ELAPSED.items())
             if el:
                 bits.append(el)
-        if self.view == _CLEAN:
+        if self.view == _CLEAN or (self.view == _LOOSE and self.trash):
             bits.append("回收站模式" if self.trash else "真删模式")
         return bits
 
@@ -376,16 +386,17 @@ class App:
         if self.mode == "detail":
             if self.detail_item:
                 return ("i 安装 · d 下载 .deb（仅 apt）· ↑↓ 滚动 · q 返回列表")
-            return "r 卸载 · u 升级 · d 下载 .deb · ↑↓ 滚动 · q 返回列表"
+            return "o 启动 · r 卸载 · u 升级 · d 下载 .deb · ↑↓ 滚动 · q 返回列表"
         if self.view == _CLEAN:
-            return ("Enter 删除 · 空格 标记 · x 删标记 · T 切回收站 · / 过滤 · "
-                    "Tab 换视图 · ? 帮助 · q 退出")
+            return ("Enter 删除 · 空格 标记 · x 删标记 · T 切回收站 · C 返回 · "
+                    "/ 过滤 · ? 帮助 · q 退出")
+        if self.view in (_LIST, _LOCAL, _UPGRADABLE, _LOOSE):
+            return ("Enter 详情 · r 卸载/删除 · o 启动 · u 升级 · d 下载 · "
+                    "/ 搜索 · t 类型 · s 含系统 · T 回收站(散落) · C 磁盘回收 · "
+                    "R 重采 · ? 帮助 · q 退出")
         if self.view == _SEARCH:
             return ("/ 搜索 · s 切来源 · Enter 详情 · i 安装 · d 下载(apt) · "
-                    "Tab 换视图 · ? 帮助 · q 退出")
-        if self.view in (_LIST, _LOCAL, _UPGRADABLE, _LOOSE):
-            return ("Enter 详情 · r 卸载 · u 升级 · d 下载 · / 搜索 · t 类型 · "
-                    "s 含系统 · R 重采 · Tab 换视图 · ? 帮助 · q 退出")
+                    "C 磁盘回收 · Tab 换视图 · ? 帮助 · q 退出")
         return ("Enter 详情 · / 搜索 · d 下载 · R 重采 · Tab 换视图 · ? 帮助 · q 退出")
 
     # ---------- 详情 ----------
@@ -477,6 +488,42 @@ class App:
             self.close_detail()
             self.rebuild()
             self.msg = f"已升级 {rec.name}（按 R 重新采集可刷新全部数据）"
+
+    def act_open(self, rec):
+        """启动应用。launch 是分离启动（Popen 后立即返回），不需要让出终端。"""
+        res = launch.launch(rec, cfg=self.cfg)
+        if res.ok:
+            self.msg = "已启动: " + " ".join(res.command)
+        else:
+            self.msg = f"无法启动 {rec.name}：{res.error}"
+
+    def act_delete_loose(self, scr, rec):
+        """在散落包文件视图里就地删除，不必切到磁盘回收视图。
+        删除逻辑复用 clean 层（普通权限回收站/真删，越权的走 sudo），
+        保证和「磁盘回收」视图对同一文件的行为一致。"""
+        t = clean.loose_target(rec, self.cfg)
+        if t is None:
+            self.msg = "文件已不在原位置（按 R 重新采集可刷新列表）"
+            return
+
+        def go():
+            print(f"\n→ 删除散落文件：{t.detail}（{t.size_text}）")
+            print("  方式：" + ("移入回收站" if self.trash and not t.privileged
+                              else "真删" if not t.privileged else "sudo rm（文件在系统目录）"))
+            if not _ask_yes("确认删除?"):
+                print("已取消")
+                _pause()
+                return False
+            res = clean.delete(t, trash=self.trash, on_line=print, cfg=self.cfg)
+            print("✓ 已删除" if res.ok else f"✗ 失败：{res.error}")
+            _pause()
+            return res.ok
+
+        if scr.run_external(go):
+            self.inv.records = [r for r in self.inv.records if r.key != rec.key]
+            self.inv.by_key.pop(rec.key, None)
+            self.rebuild()
+            self.msg = f"已删除 {t.detail}"
 
     def act_install_item(self, scr, item):
         """从目录安装（apt / snap / flatpak 三源统一入口）。
@@ -615,8 +662,13 @@ def _main(std, cfg, inv):
                 app.scroll = 0
             elif kind == "char" and val == "G":
                 app.scroll = len(app.detail_lines)
+            elif kind == "char" and val == "o" and app.detail_rec:
+                app.act_open(app.detail_rec)
             elif kind == "char" and val == "r" and app.detail_rec:
-                app.act_remove(scr, app.detail_rec)
+                if app.detail_rec.is_loose_file:
+                    app.act_delete_loose(scr, app.detail_rec)
+                else:
+                    app.act_remove(scr, app.detail_rec)
             elif kind == "char" and val == "u" and app.detail_rec:
                 app.act_upgrade(scr, app.detail_rec)
             elif kind == "char" and val == "i" and app.detail_item:
@@ -657,7 +709,13 @@ def _main(std, cfg, inv):
         if kind == "char" and val == "R":
             app.reload(scr)
             continue
-        if kind == "char" and val == "T" and app.view == _CLEAN:
+        if kind == "char" and val == "C":
+            # 磁盘回收不占标签位：C 进出（里面的 T/空格/x/Enter 照常工作）
+            app.set_view(_LIST if app.view == _CLEAN else _CLEAN)
+            app.msg = ("磁盘回收：Enter 删除当前项 · 空格 标记 · x 删标记 · "
+                       "C/Tab 返回" if app.view == _CLEAN else "已返回包视图")
+            continue
+        if kind == "char" and val == "T" and app.view in (_CLEAN, _LOOSE):
             app.trash = not app.trash
             app.msg = ("删除方式：移入回收站（可还原）" if app.trash
                        else "删除方式：真删")
@@ -682,12 +740,19 @@ def _main(std, cfg, inv):
             elif it:
                 app.open_detail()
             continue
+        if kind == "char" and val == "o":
+            it = app.current()
+            if it and it.kind == "pkg":
+                app.act_open(it.data)
+            else:
+                app.msg = "启动只对已安装的包有效"
+            continue
         if kind == "char" and val == "r":
             it = app.current()
             if it and it.kind == "pkg" and not it.data.is_loose_file:
                 app.act_remove(scr, it.data)
             elif it and it.kind == "pkg":
-                app.msg = "散落文件请切到「磁盘回收」视图删除"
+                app.act_delete_loose(scr, it.data)
             continue
         if kind == "char" and val == "u":
             it = app.current()

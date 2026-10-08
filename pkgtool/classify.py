@@ -74,8 +74,13 @@ def _deb(rec, index):
         return PkgClass.APP, "自带软件（装进 /opt）"
     if rec.channel in (Channel.DPKG_LOCAL, Channel.APT_LOCAL, Channel.UNKNOWN):
         # APT_LOCAL 也算：`apt install ./x.deb` 和 `dpkg -i x.deb` 一样，
-        # 都是用户自己下载本地包装进来的，只是走了不同的安装器
-        return PkgClass.APP, "用户自行安装（本地 .deb）"
+        # 都是用户自己下载本地包装进来的，只是走了不同的安装器。
+        # 但得有应用证据（桌面入口/可执行文件/装进 /opt）才给 APP：
+        # cuda-repo、cuda-keyring 这类仓库/密钥/元包也是本地 .deb，标成
+        # "软件"会误导用户以为可以启动甚至卸载（卸掉会连带弄坏 apt 源）。
+        if has_desktop or exes or "opt" in top_dirs:
+            return PkgClass.APP, "用户自行安装（本地 .deb）"
+        return PkgClass.LIBRARY, "本地 .deb 但无应用入口（仓库/密钥/元包类载荷）"
     if section in ("libs", "libdevel"):
         return PkgClass.LIBRARY, f"section={section}"
     if _LIB_NAME_RE.match(name) or name.endswith(_LIBRARY_SUFFIXES):

@@ -51,20 +51,27 @@ class Target:
 # ---------- 各类目标的扫描 ----------
 
 
+def loose_target(rec, cfg=CFG):
+    """一条散落文件记录 → 清理目标；文件已不在原位置时返回 None。
+    磁盘回收视图与散落包文件视图共用，保证两处删除行为一致。"""
+    path = rec.extra.get("loose")
+    if not path or not os.path.exists(path):
+        return None
+    return Target(
+        kind="loose", label=f"{rec.name} {rec.version}", detail=path,
+        size_mb=rec.size_mb or file_size_mb(path), paths=[path],
+        privileged=not is_under_home(path, cfg), note=loose_state(rec))
+
+
 def _loose(inv, cfg):
     """磁盘上散落的 .deb / .AppImage。"""
     out = []
     for r in (inv.records if inv else []):
         if not r.is_loose_file:
             continue
-        path = r.extra.get("loose")
-        if not path or not os.path.exists(path):
-            continue
-        out.append(Target(
-            kind="loose", label=f"{r.name} {r.version}", detail=path,
-            size_mb=r.size_mb or file_size_mb(path),
-            paths=[path], privileged=not is_under_home(path, cfg),
-            note=loose_state(r)))
+        t = loose_target(r, cfg)
+        if t:
+            out.append(t)
     return out
 
 

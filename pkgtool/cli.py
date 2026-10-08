@@ -9,7 +9,7 @@
 import argparse
 import sys
 
-from . import catalog, clean, inventory, labels, report, tui, upgrade
+from . import catalog, clean, inventory, labels, launch, report, tui, upgrade
 from .apt import actions, lists
 from .config import CFG
 from .remove import execute, preview
@@ -317,6 +317,19 @@ def cmd_clean(args):
     return 1 if failed else 0
 
 
+def cmd_run(args):
+    inv = _collect(args)
+    rec = _resolve(inv, args.name, args.type)
+    if rec is None:
+        return 1
+    res = launch.launch(rec, CFG)
+    if res.ok:
+        print(f"✓ 已启动: {' '.join(res.command)}")
+        return 0
+    _err(f"启动失败：{res.error}")
+    return 1
+
+
 def cmd_config(args):
     out = []
     for k, v in sorted(CFG.dump().items()):
@@ -437,6 +450,13 @@ def build_parser():
                    help="非交互：直接删除全部匹配目标")
     p.add_argument("-o", "--output", default="", help="配合 --list 写入文件")
     p.set_defaults(func=cmd_clean)
+
+    p = sub.add_parser("run", help="启动已安装的应用（按格式选 deb 可执行文件 / "
+                                   "snap run / flatpak run / AppImage 本体）")
+    p.add_argument("name")
+    p.add_argument("-t", "--type", default=None, help="同名多类型时指定")
+    p.add_argument("--quiet", action="store_true", help="不打印采集进度")
+    p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("config", help="打印当前生效的全部路径与阈值")
     p.set_defaults(func=cmd_config)

@@ -166,6 +166,9 @@ def render_detail(rec):
     if rec.is_loose_file:
         add("文件状态", labels.loose_state(rec))
     add("可执行文件", f"{len(rec.executables)} 个")
+    from . import launch            # 局部导入：输出层不静态依赖执行层
+    argv = launch.plan(rec)
+    add("启动命令", " ".join(argv) if argv else "（无启动入口，不是可运行的应用）")
     add("更新通道", labels.update_advice(rec))
 
     out = [f"{rec.name}  {rec.version}", "─" * max(20, width(rec.name) + width(rec.version) + 2)]
