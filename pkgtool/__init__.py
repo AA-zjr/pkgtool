@@ -14,7 +14,7 @@
   for rec in inventory.select(inv, only_local=True):
       print(rec.name, rec.version)
 """
-__version__ = "2.1.0"
+__version__ = "0.0.1"
 
 from .base import (CSV_HEADER, Backend, Channel, OriginKind, PackageRecord,
                    PkgClass, is_safe_name)
