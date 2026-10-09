@@ -24,7 +24,7 @@ _PATH_FIELDS = (
     "dpkg_status", "dpkg_info_dir", "dpkg_log_glob", "apt_history_glob",
     "apt_lists_dir", "apt_archives_dir", "flatpak_system_dir",
     "flatpak_exports_bin", "snap_store_dir", "snap_mount_dir",
-    "linyap_repo_dir",
+    "linyap_repo_dir", "sys_cache_dir",
 )
 
 
@@ -50,6 +50,7 @@ class Config:
     apt_history_glob: str = "/var/log/apt/history.log*"
     apt_lists_dir: str = "/var/lib/apt/lists"
     apt_archives_dir: str = "/var/cache/apt/archives"
+    sys_cache_dir: str = "/var/cache"
     ext_states_paths: tuple = ("/var/lib/apt/extended_states",
                                "/var/lib/dpkg/extended_states")
     index_arches: tuple = ("amd64", "all")

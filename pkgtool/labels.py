@@ -70,6 +70,7 @@ LOOSE_STATE_LABEL = {
 CLEAN_KIND_LABEL = {
     "loose": "散落包文件",
     "apt-cache": "apt 下载缓存",
+    "sys-cache": "系统缓存 /var/cache",
     "snap-rev": "snap 旧修订",
     "flatpak-unused": "flatpak 无用运行时",
     "linyap-unused": "玲珑未引用运行时",

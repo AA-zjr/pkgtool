@@ -41,7 +41,7 @@ pkgtool info / run 名字        详情 / 启动
 pkgtool search 关键词          搜 apt / Snap Store / flathub
 pkgtool install -s snap 名字   安装；来源必填
 pkgtool remove 名字            卸载，先预览再确认
-pkgtool clean --list          磁盘回收清单
+pkgtool clean --list          磁盘回收清单（用户缓存 /var/cache/散落包/旧运行时）
 ```
 
 需要 root 的操作由 `sudo` 在终端提示密码，程序不经手。

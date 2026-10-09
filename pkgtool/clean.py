@@ -33,8 +33,8 @@ from .base import delete_paths, file_size_mb, is_safe_name, is_under_home
 from .config import CFG
 from .labels import loose_state, size_text
 
-KINDS = ("loose", "apt-cache", "snap-rev", "flatpak-unused", "linyap-unused",
-         "user-cache", "conda-cache")
+KINDS = ("loose", "apt-cache", "sys-cache", "snap-rev", "flatpak-unused",
+         "linyap-unused", "user-cache", "conda-cache")
 
 
 @dataclass
@@ -93,6 +93,36 @@ def _apt_cache(inv, cfg):
                    detail=d,
                    size_mb=total, argv=["apt-get", "clean"], privileged=True,
                    note="只删已下载的包文件，需要时会重新下载")]
+
+
+def _sys_cache(inv, cfg):
+    """/var/cache 下的系统级缓存（逐个顶层条目，root 权限删除）。
+
+    排除（防重复与敏感区域）：
+    · apt/   —— apt 下载缓存已有专门条目（apt-get clean），跳过防重复计数
+    · private/ —— 某些发行版把服务的用户级缓存放这里，可能含敏感内容
+    崩溃转储（/var/crash、/var/lib/systemd/coredump）不在 /var/cache 下，
+    天然不进扫描范围——它们可能含进程内存，属敏感区域。
+    缓存目录删了会被对应服务自动重建，不会丢配置。"""
+    base = cfg.sys_cache_dir
+    if not os.path.isdir(base):
+        return []
+    try:
+        entries = os.listdir(base)
+    except OSError:
+        return []
+    out = []
+    for e in sorted(entries):
+        if e in ("apt", "private") or e.startswith("."):
+            continue
+        p = os.path.join(base, e)
+        size = file_size_mb(p)
+        if size >= cfg.cache_min_mb:
+            out.append(Target(kind="sys-cache", label=e, detail=p,
+                              size_mb=size, paths=[p], privileged=True,
+                              note="系统缓存，删除后自动重建"))
+    out.sort(key=lambda t: -t.size_mb)
+    return out
 
 
 def _snap_revisions(inv, cfg):
@@ -217,6 +247,7 @@ def _conda_cache(inv, cfg):
 
 
 COLLECTORS = (("loose", _loose), ("apt-cache", _apt_cache),
+              ("sys-cache", _sys_cache),
               ("snap-rev", _snap_revisions), ("flatpak-unused", _flatpak_unused),
               ("linyap-unused", _linyap_unused),
               ("user-cache", _user_cache), ("conda-cache", _conda_cache))
