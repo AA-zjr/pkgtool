@@ -18,6 +18,7 @@ import shutil
 import subprocess
 
 from .apt import actions
+from .base import is_safe_name
 from .classify import _SNAP_BASE_RE          # snap 基础运行时名单，判定逻辑同源
 from .config import CFG
 
@@ -101,7 +102,10 @@ def _pick_exe(rec):
 
 
 def plan(rec, cfg=CFG):
-    """→ 启动 argv；该记录没有可启动的可执行程序时返回 None。"""
+    """→ 启动 argv；该记录没有可启动的可执行程序时返回 None。
+    snap/flatpak/linyap 分支的名字先过白名单——这些标识来自各自的
+    清单数据，防选项注入；install/remove/download 路径有同样检查，
+    启动路径不能成为例外。deb 分支走的是文件系统路径，不适用。"""
     t = rec.pkg_type
     if t == "deb":
         argv = _desktop_argv(rec, cfg)
@@ -109,6 +113,8 @@ def plan(rec, cfg=CFG):
             return argv
         exe = _pick_exe(rec)
         return [exe] if exe else None
+    if not is_safe_name(rec.name):
+        return None
     if t == "snap":
         p = os.path.join(cfg.snap_mount_dir, "bin", rec.name)
         if os.path.exists(p):

@@ -6,12 +6,18 @@ CLI 与交互界面共用（原 Web UI 里 apt 和 flatpak 是两份几乎一样
 labels.update_advice 的建议文案。
 """
 from .apt import actions
+from .base import is_safe_name
 from .config import CFG
 
 
 def plan(rec):
-    """→ (argv, privileged)；返回 None 表示该格式没有系统级更新通道。"""
+    """→ (argv, privileged)；返回 None 表示该格式没有系统级更新通道。
+    名字先过白名单：snap/flatpak/linyap 的标识来自各自的清单数据，
+    防止以 '-' 开头的伪造标识在升级命令里变成选项注入。
+    （install/remove/download/clean 路径均有同样检查，此处不能例外。）"""
     t, n = rec.pkg_type, rec.name
+    if not is_safe_name(n) or (rec.candidate and not is_safe_name(rec.candidate)):
+        return None
     if t == "deb":
         spec = f"{n}={rec.candidate}" if rec.candidate else n
         return ["apt-get", "install", "-y", spec], True
