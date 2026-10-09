@@ -140,6 +140,29 @@ def _linyap_unused(inv, cfg):
                    privileged=True, note="体积要执行后才知道")]
 
 
+def child_targets(path, cfg=CFG):
+    """下钻：列出一个缓存目录下一层的子项（目录与文件），按体积降序。
+    供磁盘回收视图逐层深入——tracker3/JetBrains 这类大缓存往往是其中
+    某个子目录在膨胀，能定位到具体来源就不用整个目录陪葬。
+    小于 cache_min_mb 的子项不列，与顶层扫描同一阈值。"""
+    if not os.path.isdir(path):
+        return []
+    try:
+        entries = os.listdir(path)
+    except OSError:
+        return []
+    out = []
+    for e in sorted(entries):
+        p = os.path.join(path, e)
+        size = file_size_mb(p)
+        if size >= cfg.cache_min_mb:
+            out.append(Target(kind="user-cache", label=e, detail=p,
+                              size_mb=size, paths=[p],
+                              note="可再生缓存，会话与配置不受影响"))
+    out.sort(key=lambda t: -t.size_mb)
+    return out
+
+
 def _user_cache(inv, cfg):
     """~/.cache 与 flatpak 沙盒应用缓存（~/.var/app/*/cache）下的顶层目录。
     每个目录单独一条，用户可以只挑不要的删；小于 cfg.cache_min_mb 的不列。"""

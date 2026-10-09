@@ -13,6 +13,7 @@ remove / clean / upgrade / actions 执行、labels / report 出文案。这样�
 """
 import curses
 import locale
+import os
 import sys
 from dataclasses import dataclass
 
@@ -53,6 +54,8 @@ _HELP = """按键一览
   apt 下载缓存、snap 旧修订、flatpak 无用运行时、conda 包缓存）
     Enter             删除当前项         空格        标记 / 取消标记
     x                 删除全部标记项      T           切换「移入回收站 / 真删」
+    v                 进入当前目录下层（逐层深入定位大缓存来源）
+    b                 返回上一层
 
   仓库搜索视图（apt 源 / Snap Store / flathub 三源）
     /                 输入关键词         s           切换来源（全部/apt/snap/flatpak）
@@ -123,6 +126,7 @@ class App:
         self.ptype = "all"             # 包类型筛选，t 键循环
         self.source = "all"            # 仓库搜索的来源筛选，s 键循环
         self.trash = False
+        self.drill = None               # 磁盘回收下钻：当前所在的缓存目录路径
         self.items = []
         self.lv = tui.ListView([], _render, per_item=2)
         self.mode = "list"               # list / detail
@@ -226,6 +230,20 @@ class App:
 
     def _targets(self):
         q = self.q.lower()
+        if self.drill:
+            # 下钻模式：只列当前目录的下一层子项，可继续 v 逐层深入
+            out = []
+            for t in clean.child_targets(self.drill, cfg=self.cfg):
+                if q and q not in f"{t.kind} {t.label} {t.detail}".lower():
+                    continue
+                out.append(Item("target",
+                                pad(t.size_text, 10) + "  "
+                                + truncate(truncate(t.label, 40), 58),
+                                t.detail, t, "norm"))
+            if not out:
+                out = [Item("target", "（没有可清理的子项）",
+                            "b 返回上一层", None, "dim")]
+            return out
         out = []
         for t in clean.collect_targets(self.cfg, inv=self.inv):
             if q and q not in f"{t.kind} {t.label} {t.detail}".lower():
@@ -389,6 +407,8 @@ class App:
                         and i.data.size_known)
             if sized:
                 bits.append("可回收 " + labels.size_text(round(sized, 1)))
+            if self.drill:
+                bits.append("位置 " + self.drill)
         return bits
 
     def _draw_detail(self, scr, y0, body_h, w):
@@ -415,8 +435,8 @@ class App:
                 return " · ".join(self._rec_hints(self.detail_rec, detail=True))
             return "↑↓ 滚动 · q 返回列表"
         if self.view == _CLEAN:
-            return ("Enter 删除 · 空格 标记 · x 删标记 · T 切回收站 · / 过滤 · "
-                    "Tab 换视图 · ? 帮助 · q 退出")
+            return ("Enter 删除 · v 下钻 · b 返回 · 空格 标记 · x 删标记 · "
+                    "T 切回收站 · / 过滤 · ? 帮助 · q 退出")
         if self.view == _SEARCH:
             bits = ["/ 搜索", "s 切来源"]
             it = self.current()
@@ -777,6 +797,25 @@ def _main(std, cfg, inv):
             continue
         if app.view == _CLEAN and kind == "char" and val == "x":
             app.act_clean_marked(scr)
+            continue
+        if app.view == _CLEAN and kind == "char" and val == "v":
+            # 下钻：进入当前缓存目录的下一层，定位大缓存的具体来源
+            it = app.current()
+            if it and it.kind == "target" and it.data is not None \
+                    and len(it.data.paths) == 1 and os.path.isdir(it.data.paths[0]):
+                app.drill = it.data.paths[0]
+                app.rebuild()
+                app.msg = f"已进入 {app.drill}（v 继续下钻 · b 返回）"
+            else:
+                app.msg = "只有目录类条目可以下钻"
+            continue
+        if app.view == _CLEAN and kind == "char" and val in ("b",):
+            if app.drill:
+                parent = os.path.dirname(app.drill)
+                app.drill = parent if "/.cache" in parent or "/.var/app" in parent \
+                    or "/cache" in parent else None
+                app.rebuild()
+                app.msg = "已返回上一层" if app.drill else "已回到清理列表"
             continue
         if tui.is_enter(kind, val):
             it = app.current()
