@@ -210,13 +210,54 @@ class Backend(ABC):
         """
 
 
+# 挂载点黑名单：这些路径要么已被固定扫描根覆盖，要么是系统/引导分区，
+# 扫它们纯属浪费（EFI 分区）或有风险
+_MOUNT_EXCLUDE = ("/", "/boot", "/efi", "/var", "/usr", "/etc", "/opt",
+                  "/tmp", "/snap", "/run", "/srv", "/home", "/root")
+
+
+def extra_mount_roots(cfg=CFG):
+    """/proc/mounts 里识别出的额外本地磁盘挂载点（跨盘扫描散落包文件用）。
+
+    只认设备路径以 /dev/ 开头的挂载——网络文件系统（nfs/cifs 的设备形如
+    host:/path 或 //host/share）与伪文件系统（proc/tmpfs/overlay）天然
+    排除，慢速网络盘不会拖垮扫描。系统目录、引导分区跳过；挂载点里的
+    \040（空格转义）还原成空格。挂载关系每次实时读取，热插 U 盘即插即扫。"""
+    out, seen = [], set()
+    try:
+        with open("/proc/mounts", errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        dev, mnt, fstype = parts[0], parts[1], parts[2]
+        if not dev.startswith("/dev/") or fstype.startswith("squashfs"):
+            continue
+        mnt = mnt.replace("\\040", " ").replace("\\011", "\t").rstrip("/") or "/"
+        if mnt in seen:
+            continue
+        seen.add(mnt)
+        if any(mnt == s or mnt.startswith(s + "/") for s in _MOUNT_EXCLUDE):
+            continue
+        if os.path.isdir(mnt):
+            out.append(mnt)
+    return out
+
+
 def scan_file_areas(suffixes, maxdepth=None, cfg=CFG):
     """扫描用户可写区域里的包文件（.deb/.AppImage…），不进隐藏目录/缓存。
-    覆盖：主目录（含中文"下载"）+ config.scan_system_roots。realpath 去重。"""
+    覆盖：主目录（含中文"下载"）+ config.scan_system_roots + 本机额外的
+    本地磁盘挂载点（/mnt、/media、第二块数据盘，见 extra_mount_roots）。
+    realpath 去重。"""
     maxdepth = cfg.scan_maxdepth if maxdepth is None else maxdepth
     suf = tuple(s.lower() for s in suffixes)
     seen = set()
-    for root in cfg.scan_roots:
+    roots = list(cfg.scan_roots) + [r for r in extra_mount_roots(cfg)
+                                    if r not in cfg.scan_roots]
+    for root in roots:
         if not os.path.isdir(root):
             continue
         for dirpath, dirnames, filenames in os.walk(root):
