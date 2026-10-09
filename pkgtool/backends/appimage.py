@@ -27,13 +27,8 @@ _VERSION_RE = re.compile(
 _USR_BIN_RE = re.compile(r"(?:^|/)usr/bin/([^/]+)$")
 
 
-def _squashfs_offset(path, limit):
-    """找 squashfs 超块偏移；找不到返回 None。"""
-    try:
-        with open(path, "rb") as fh:
-            data = fh.read(limit)
-    except OSError:
-        return None
+def _probe(data):
+    """在缓冲区里找合法的 squashfs 超块，返回绝对偏移；找不到 None。"""
     i = 0
     while True:
         i = data.find(b"hsqs", i)
@@ -45,6 +40,23 @@ def _squashfs_offset(path, limit):
                 and 0 < inodes < 10 ** 6):
             return i
         i += 1
+
+
+def _squashfs_offset(path, limit):
+    """找 squashfs 超块偏移；找不到返回 None。
+    两段式读取：绝大多数 AppImage 的超块在文件头部，先读 64KB 快查，
+    未命中才读全限——NTFS/FUSE 盘上 32MB 顺序读要秒级，常见路径
+    把这段开销整个省掉。"""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(min(65536, limit))
+            off = _probe(head)
+            if off is not None or limit <= len(head):
+                return off
+            fh.seek(0)
+            return _probe(fh.read(limit))
+    except OSError:
+        return None
 
 
 def _payload_listing(path, offset, cfg):

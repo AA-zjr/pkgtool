@@ -216,13 +216,11 @@ _MOUNT_EXCLUDE = ("/", "/boot", "/efi", "/var", "/usr", "/etc", "/opt",
                   "/tmp", "/snap", "/run", "/srv", "/home", "/root")
 
 
-def extra_mount_roots(cfg=CFG):
-    """/proc/mounts 里识别出的额外本地磁盘挂载点（跨盘扫描散落包文件用）。
-
-    只认设备路径以 /dev/ 开头的挂载——网络文件系统（nfs/cifs 的设备形如
-    host:/path 或 //host/share）与伪文件系统（proc/tmpfs/overlay）天然
-    排除，慢速网络盘不会拖垮扫描。系统目录、引导分区跳过；挂载点里的
-    \040（空格转义）还原成空格。挂载关系每次实时读取，热插 U 盘即插即扫。"""
+def _local_mounts(cfg=CFG):
+    """→ [(挂载点, 文件系统类型)]：/proc/mounts 里的本地磁盘挂载。
+    非 /dev 设备（nfs/cifs 网络盘）与 squashfs（snap/ISO 循环）排除，
+    慢速网络盘不会拖垮扫描；挂载点黑名单同 _MOUNT_EXCLUDE；
+    \040（空格转义）还原。挂载关系每次实时读取，热插 U 盘即插即扫。"""
     out, seen = [], set()
     try:
         with open("/proc/mounts", errors="replace") as fh:
@@ -243,24 +241,45 @@ def extra_mount_roots(cfg=CFG):
         if any(mnt == s or mnt.startswith(s + "/") for s in _MOUNT_EXCLUDE):
             continue
         if os.path.isdir(mnt):
-            out.append(mnt)
+            out.append((mnt, fstype))
     return out
+
+
+# 慢速文件系统：NTFS/exFAT 经 FUSE 或 ntfs3 挂载，元数据操作比 ext4 慢
+# 一个数量级以上——Windows 迁移用户常见，扫描预算要单独收紧
+_SLOW_FS = frozenset({"fuseblk", "ntfs", "ntfs-3g", "exfat", "vfat"})
+
+
+def extra_mount_roots(cfg=CFG):
+    """/proc/mounts 里识别出的额外本地磁盘挂载点（跨盘扫描散落包文件用）。"""
+    return [mnt for mnt, _fst in _local_mounts(cfg)]
 
 
 def scan_file_areas(suffixes, maxdepth=None, cfg=CFG):
     """扫描用户可写区域里的包文件（.deb/.AppImage…），不进隐藏目录/缓存。
     覆盖：主目录（含中文"下载"）+ config.scan_system_roots + 本机额外的
     本地磁盘挂载点（/mnt、/media、第二块数据盘，见 extra_mount_roots）。
-    realpath 去重。"""
+    realpath 去重。
+
+    每个扫描根有时间预算（scan_root_seconds）：冷缓存的 NTFS/FUSE 盘
+    上万文件遍历可能到分钟级（Windows 迁移用户的常见形态），超时即停、
+    已发现的保留；NTFS/exFAT 等慢速文件系统预算减半。"""
+    import time
     maxdepth = cfg.scan_maxdepth if maxdepth is None else maxdepth
     suf = tuple(s.lower() for s in suffixes)
     seen = set()
     roots = list(cfg.scan_roots) + [r for r in extra_mount_roots(cfg)
                                     if r not in cfg.scan_roots]
+    slow = {mnt for mnt, fst in _local_mounts(cfg) if fst in _SLOW_FS}
     for root in roots:
         if not os.path.isdir(root):
             continue
+        budget = cfg.scan_root_seconds * (0.5 if root in slow else 1.0)
+        deadline = time.monotonic() + budget
         for dirpath, dirnames, filenames in os.walk(root):
+            if time.monotonic() > deadline:
+                dirnames[:] = []                      # 超时：放弃剩余子树
+                break
             depth = dirpath[len(root):].count(os.sep)
             dirnames[:] = [d for d in dirnames
                            if d not in cfg.prune_dirs and not d.startswith(".")]

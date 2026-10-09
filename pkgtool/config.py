@@ -83,6 +83,7 @@ class Config:
     bin_dirs: tuple = ("/bin", "/sbin", "/usr/bin", "/usr/sbin")
     scan_system_roots: tuple = ("/opt", "/usr/local/bin", "/tmp")
     scan_maxdepth: int = 3
+    scan_root_seconds: float = 8.0   # 单个扫描根的时间预算（秒）；NTFS/FUSE 盘减半
     prune_dirs: frozenset = frozenset(
         {".cache", ".config", ".local", "node_modules", "__pycache__",
          ".venv", "venv", "snap", ".npm", ".bun", ".rustup"})
