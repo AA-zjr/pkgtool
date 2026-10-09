@@ -9,6 +9,7 @@ CLI 没有，154 个镜像自带包在两边显示不一样）。
 原实现整个 collect 包在一个 try 里，任一出错就整页空白。
 """
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from . import classify
@@ -41,24 +42,34 @@ class Inventory:
 def collect(cfg=CFG, check_updates=False, on_backend=None, only_types=None):
     """采集全部可用后端 → Inventory。
     check_updates=True 时才联网查 flathub 新版（约 2 秒），默认不查。
-    only_types 给定则只跑这些类型的后端（如只要 deb 时跳过 snap/flatpak 的子进程探测）。"""
+    only_types 给定则只跑这些类型的后端（如只要 deb 时跳过 snap/flatpak 的子进程探测）。
+    后端之间彼此独立（各有错误隔离），用线程池并发跑：后端的主要开销
+    是子进程（apt-mark/snap list/flatpak list/ll-cli），等待会释放 GIL，
+    墙钟时间从"各后端之和"变成"最慢的那个"。"""
     t0 = time.time()
     records, per_type, errors = [], {}, {}
-    for be in discover(cfg):
-        if only_types and not any(be.pkg_type.startswith(t) for t in only_types):
-            continue
+
+    selected = [be for be in discover(cfg)
+                if not only_types
+                or any(be.pkg_type.startswith(t) for t in only_types)]
+
+    def _run(be):
         tb = time.time()
         try:
             recs = be.collect()
+            return recs, time.time() - tb, ""
         except Exception as e:                     # noqa: BLE001 单后端失败不拖垮全局
-            errors[be.pkg_type] = f"{type(e).__name__}: {e}"
+            return [], time.time() - tb, f"{type(e).__name__}: {e}"
+
+    with ThreadPoolExecutor(max_workers=len(selected) or 1) as pool:
+        for be, (recs, elapsed, err) in zip(selected, pool.map(_run, selected)):
+            if err:
+                errors[be.pkg_type] = err
+            else:
+                per_type[be.pkg_type] = len(recs)
+                records.extend(recs)
             if on_backend:
-                on_backend(be.pkg_type, 0, time.time() - tb, errors[be.pkg_type])
-            continue
-        per_type[be.pkg_type] = len(recs)
-        records.extend(recs)
-        if on_backend:
-            on_backend(be.pkg_type, len(recs), time.time() - tb, "")
+                on_backend(be.pkg_type, 0 if err else len(recs), elapsed, err)
 
     index = _apt_index(cfg)
     for rec in records:

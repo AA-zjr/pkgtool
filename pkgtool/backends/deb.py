@@ -14,6 +14,7 @@
 154 个镜像自带包因此被误报成 "apt 源安装"，前端判预装的分支成了死代码。
 """
 import os
+import threading
 
 from ..apt import deps, dpkg, lists, logs
 from ..base import (Backend, Channel, OriginKind, PackageRecord, file_size_mb,
@@ -87,12 +88,23 @@ class DebBackend(Backend):
     def collect(self):
         cfg = self.cfg
         installed = dpkg.installed(cfg)
+        # apt-mark 是两个 ~0.15s 的子进程，与其后的纯解析工作并发跑；
+        # DepGraph 依赖 manual 集合，构建前 join。子进程等待释放 GIL，
+        # 并行是实打实的墙钟收益。
+        marks_box = {}
+
+        def _apt_marks():
+            marks_box["marks"] = dpkg.apt_marks(cfg)
+
+        th = threading.Thread(target=_apt_marks, daemon=True)
+        th.start()
         first_install, earliest = logs.dpkg_installs(cfg)
         history = logs.apt_history(cfg)
-        manual, auto = dpkg.apt_marks(cfg)
         ext_autos, ext_path = dpkg.extended_states(cfg)
         cutoff = logs.birth_cutoff(earliest, cfg)
         index = lists.load_index(cfg)
+        th.join()
+        manual, auto = marks_box["marks"]
         graph = deps.DepGraph(installed, manual)
 
         records = []
