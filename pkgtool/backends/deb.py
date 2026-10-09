@@ -116,6 +116,12 @@ class DebBackend(Backend):
             ext_mark = "absent" if ext_path is None else \
                 ("auto" if ext_autos.get(name, False) else "manual")
             extra = {"apt_mark": mark, "ext_states": ext_mark, "top_dirs": top_dirs}
+            # dpkg status 自带的 Essential/Priority 是空 apt 索引环境下
+            # 卸载安全判定的最后依据（见 classify._deb 第一层）
+            if entry.essential.strip().lower() == "yes":
+                extra["essential"] = "yes"
+            if entry.priority:
+                extra["priority"] = entry.priority
             if mark != "?" and ext_mark != "absent" and mark != ext_mark:
                 extra["mark_conflict"] = f"apt-mark={mark} extended_states={ext_mark}"
             if len(desktops) == 1:

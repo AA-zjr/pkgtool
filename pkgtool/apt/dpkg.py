@@ -17,7 +17,10 @@ from ..config import CFG
 class StatusEntry:
     """/var/lib/dpkg/status 里一个包的全部所需字段。
     体积与依赖都在这里一次读出来，避免为算大小再去遍历文件树、
-    为算依赖图再解析一遍 status。"""
+    为算依赖图再解析一遍 status。
+    essential/priority 来自 dpkg 自身的记录，不依赖 apt 索引——
+    空 apt 索引的环境（最小安装、lists 未更新）里它们是卸载安全
+    判定的最后依据。"""
     name: str
     version: str = ""
     status: str = ""
@@ -25,16 +28,15 @@ class StatusEntry:
     depends: str = ""
     pre_depends: str = ""
     recommends: str = ""
-
-    @property
-    def size_mb(self):
-        return round(self.installed_size_kb / 1024.0, 1)
+    priority: str = ""
+    essential: str = ""
 
 
 _STATUS_FIELDS = {
     "Package": "name", "Version": "version", "Status": "status",
     "Installed-Size": "installed_size_kb", "Depends": "depends",
     "Pre-Depends": "pre_depends", "Recommends": "recommends",
+    "Priority": "priority", "Essential": "essential",
 }
 
 
@@ -54,7 +56,9 @@ def installed(cfg=CFG):
                 installed_size_kb=int(size) if str(size).isdigit() else 0,
                 depends=cur.get("depends", ""),
                 pre_depends=cur.get("pre_depends", ""),
-                recommends=cur.get("recommends", ""))
+                recommends=cur.get("recommends", ""),
+                priority=cur.get("priority", ""),
+                essential=cur.get("essential", ""))
         cur.clear()
 
     try:

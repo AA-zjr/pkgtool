@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 from .apt import actions
 from .base import delete_paths, file_size_mb, is_safe_name, is_under_home
-from .classify import is_removable
+from .classify import CRITICAL, is_removable
 from .config import CFG
 from .labels import block_reason
 
@@ -228,6 +228,11 @@ def preview(rec, purge_residues=False, autoremove=True, cfg=CFG):
     if not is_removable(rec):
         return Plan(ok=False, pkg_type=rec.pkg_type, name=rec.name,
                     error=block_reason(rec.pkg_class))
+    # 硬性保险：即使未来的分类规则改动误放行了底层系统包，这里也绝不放行。
+    # dpkg Essential 标记是 dpkg 自己的权威声明，双确认（另见 classify._deb）。
+    if rec.extra.get("essential") == "yes" or rec.name in CRITICAL:
+        return Plan(ok=False, pkg_type=rec.pkg_type, name=rec.name,
+                    error=f"{rec.name} 是系统底层必需包，拒绝卸载")
     t, target = rec.pkg_type, _target(rec)
     if t != "appimage" and not is_safe_name(target):
         return Plan(ok=False, pkg_type=t, name=rec.name,

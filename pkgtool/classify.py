@@ -58,15 +58,21 @@ def classify(rec, index=None):
 def _deb(rec, index):
     name = rec.name
     meta = index.meta(name) if isinstance(index, apt_lists.RepoIndex) else {}
+    # priority 有两个来源：apt 索引（元数据最全）与 dpkg status（离线兜底）。
+    # 空 apt 索引的环境（最小安装、lists 未更新）里索引查无此包，此时
+    # dpkg status 自带的 Essential/Priority 是防止底层系统包被误判为
+    # "软件"的最后依据（实测踩过：空索引环境系统包被判可删）。
+    priority = meta.get("priority", "") or rec.extra.get("priority", "")
     section = meta.get("section", "")
-    priority = meta.get("priority", "")
     top_dirs = rec.extra.get("top_dirs") or []
     has_desktop = bool(rec.extra.get("desktop_id") or rec.extra.get("desktop_files"))
     exes = rec.executables
     mark = rec.extra.get("apt_mark", "")
 
-    if name in CRITICAL or priority in ("required", "important"):
-        return PkgClass.BASE, f"基础包（priority={priority or 'critical-list'}）"
+    if name in CRITICAL or rec.extra.get("essential") == "yes":
+        return PkgClass.BASE, "基础包（critical-list 或 dpkg Essential 标记）"
+    if priority in ("required", "important"):
+        return PkgClass.BASE, f"基础包（priority={priority}）"
     if name.startswith(_SYSTEM_PREFIXES) or "firmware" in name \
             or section in ("kernel", "base"):
         return PkgClass.SYSTEM, "内核/固件/显卡驱动/X 服务"
