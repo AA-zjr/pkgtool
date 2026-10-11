@@ -291,6 +291,14 @@ def preview(rec, purge_residues=False, autoremove=True, cfg=CFG, inv=None):
             did = r.extra.get("desktop_id", "")
             if did:
                 ids.add(did.lower())
+            # 可执行基名与 command/display 也算认领身份：其他包的数据目录
+            # 往往以它们命名（玲珑 VSCode 的配置在 ~/.config/Code，与它的
+            # app-id 对不上，只有 command/display 能认领）
+            extra_names = [r.extra.get("command", ""), r.extra.get("display_name", "")]
+            for cand in list(r.executables) + extra_names:
+                b = os.path.basename((cand or "").strip()).lower()
+                if len(b) >= cfg.residue_min_id_len:
+                    ids.add(b)
             others.append(ids)
     residues = find_residues(rec, cfg, others=others) if purge_residues else []
     user_paths = []
