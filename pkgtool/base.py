@@ -56,6 +56,34 @@ def matches_tokens(haystack, tokens):
     return all(t in h for t in tokens)
 
 
+def is_subsequence(q, s):
+    """q 的字符是否按顺序全部出现在 s 中（不要求连续）。
+    供搜索的缩写模糊匹配：ffx → firefox。"""
+    it = iter(s)
+    return all(c in it for c in q)
+
+
+def edit_distance_at_most(a, b, k):
+    """a 与 b 的编辑距离是否 ≤ k（插入/删除/替换），超过提前退出。
+    带逐行剪枝的 Levenshtein：中途最优值已超 k 就不再算下去，
+    供搜索的拼写纠错模糊匹配：firfox → firefox。"""
+    if abs(len(a) - len(b)) > k:
+        return False
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        best = i
+        for j, cb in enumerate(b, 1):
+            v = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb))
+            cur.append(v)
+            if v < best:
+                best = v
+        if best > k:
+            return False
+        prev = cur
+    return prev[-1] <= k
+
+
 def file_size_mb(path):
     """文件/目录占用（MB，一位小数）。目录递归累加，读不到的条目跳过。"""
     total = 0

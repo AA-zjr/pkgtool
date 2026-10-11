@@ -388,7 +388,8 @@ def build_parser():
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_info)
 
-    p = sub.add_parser("search", help="跨源搜索：apt 本地索引 / Snap Store / flathub")
+    p = sub.add_parser("search", help="跨源搜索：apt 本地索引 / Snap Store / flathub（"
+                                      "支持拼写纠错与缩写的模糊匹配）")
     p.add_argument("query")
     p.add_argument("-s", "--source", choices=catalog.SOURCES + ("all",),
                    default="all", help="限定来源（默认全部可用来源）")

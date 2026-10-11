@@ -22,7 +22,8 @@ from dataclasses import asdict, dataclass
 from email.utils import parsedate_to_datetime
 from functools import cmp_to_key
 
-from ..base import matches_tokens, query_tokens
+from ..base import (edit_distance_at_most, is_subsequence, matches_tokens,
+                    query_tokens)
 from ..compress import open_text, read_text, strip_compressed_suffix
 from ..config import CFG
 from .version import newest, ver_cmp, ver_gt
@@ -229,10 +230,11 @@ class RepoIndex:
 
     def search(self, q, limit=30):
         """按包名/描述搜索。
-        排名：完全匹配 > 前缀 > 名字含 > 描述含 > 分词全命中。最后一级用分词，
-        让 "zen browser" 这类多词查询也能命中名字里用下划线/连字符的包。
-        先全量扫描再排序——原实现边扫边在 limit*3 处 break，结果取决于 dict
-        插入顺序，会漏掉更优匹配。"""
+        排名：完全匹配 > 前缀 > 名字含 > 描述含 > 分词全命中 >
+        模糊纠错（编辑距离 ≤2）> 模糊缩写（子序列）。最后两级是兜底：
+        前面各级命中已够 limit 时跳过——8 万包全量算编辑距离不可接受，
+        且常规命中充足时模糊结果只会添乱。模糊仅对包名（len(q)≥3），
+        描述不做模糊（噪音太大）。"""
         q = (q or "").lower().strip()
         if not q:
             return []
@@ -255,6 +257,18 @@ class RepoIndex:
             else:
                 continue
             hits.append((rank, name))
+        if len(hits) < limit and len(q) >= 3:
+            # 模糊兜底：只对前面全部落空的包计算，长度差 >2 直接排除
+            seen = {name for _r, name in hits}
+            for name in self._entries:
+                if name in seen:
+                    continue
+                nl = name.lower()
+                # 长度差门槛只用于编辑距离（子序列天然允许 q 比名字短）
+                if abs(len(nl) - len(q)) <= 2 and edit_distance_at_most(q, nl, 2):
+                    hits.append((5, name))
+                elif is_subsequence(q, nl):
+                    hits.append((6, name))
         hits.sort()
         out = []
         for _rank, name in hits[:limit]:

@@ -23,7 +23,8 @@ import time
 from dataclasses import dataclass, field
 
 from .apt import actions, lists
-from .base import is_safe_name, matches_tokens, query_tokens
+from .base import (edit_distance_at_most, is_safe_name, is_subsequence,
+                   matches_tokens, query_tokens)
 from .config import CFG
 
 SOURCES = ("apt", "snap", "flatpak")
@@ -191,9 +192,10 @@ def _flatpak_catalog(cfg):
 
 
 def _rank(items, q, limit):
-    """本地过滤 + 排名：完全匹配 > 前缀 > 子串 > 分词全命中。
-    最后一级用分词，这样 "zen browser" 才搜得到 app.zen_browser.zen ——
-    整串子串匹配对不上（名字里是下划线，查询里是空格）。"""
+    """本地过滤 + 排名：完全匹配 > 前缀 > 子串 > 分词全命中 >
+    模糊纠错（编辑距离 ≤2）> 模糊缩写（子序列）。
+    分词级让 "zen browser" 搜得到 app.zen_browser.zen；模糊级是兜底，
+    前面命中够 limit 时跳过——打错的字（firfox）和缩写（ffx）也能找到。"""
     ql = q.lower()
     tokens = query_tokens(q)
     hits = []
@@ -210,6 +212,17 @@ def _rank(items, q, limit):
         else:
             continue
         hits.append((r, it.display or it.name, it))
+    if len(hits) < limit and len(ql) >= 3:
+        seen = {(it.name or "").lower() for _r, _t, it in hits}
+        for it in items:
+            if (it.name or "").lower() in seen:
+                continue
+            n = (it.name or "").lower()
+            # 长度差门槛只用于编辑距离（子序列天然允许 q 比名字短）
+            if abs(len(n) - len(ql)) <= 2 and edit_distance_at_most(ql, n, 2):
+                hits.append((4, it.display or it.name, it))
+            elif is_subsequence(ql, n):
+                hits.append((5, it.display or it.name, it))
     hits.sort(key=lambda t: (t[0], t[1]))
     return [t[2] for t in hits[:limit]]
 
