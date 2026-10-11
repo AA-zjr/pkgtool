@@ -495,7 +495,8 @@ class App:
             print()
             print(report.render_detail(rec))
             purge = _ask_yes("\n同时删除主目录下的配置/缓存残留?")
-            plan = remove.preview(rec, purge_residues=purge, cfg=self.cfg)
+            plan = remove.preview(rec, purge_residues=purge, cfg=self.cfg,
+                                  inv=self.inv)
             box["plan"] = plan
             if not plan.ok:
                 print(f"\n拒绝卸载 {rec.name}：{plan.error}")

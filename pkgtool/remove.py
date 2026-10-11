@@ -111,8 +111,16 @@ def _is_protected(path, cfg):
     return target in protected
 
 
-def find_residues(rec, cfg=CFG):
-    """扫描残留目录/文件 → [(path, size_mb)]。范围见 _residue_roots。"""
+def find_residues(rec, cfg=CFG, others=None):
+    """扫描残留目录/文件 → [(path, size_mb)]。范围见 _residue_roots。
+
+    others 是其他已安装包的身份集合列表（名字/desktop_id，小写）。
+    近名共存保护——实测踩过：卸载 qoder-cn 时前缀匹配扫走了共存的
+    qoder-cn-ide 的数据（qoder-cn-updater 两家共用，无法可靠归属）：
+    · 名字互为前缀（qoder-cn ⊂ qoder-cn-ide）→ 前缀匹配整体关闭，
+      只认精确命中——宁可少删不可错删
+    · 同名不同来源（deb/snap 各一个 firefox）→ 名字精确命中的目录
+      同样无法归属，跳过不删"""
     exact_ids = {rec.name}
     for e in rec.executables:
         b = os.path.basename(e)
@@ -123,6 +131,16 @@ def find_residues(rec, cfg=CFG):
         exact_ids.add(desktop_id)
     prefix_ids = {rec.name}
 
+    name_claimed, prefix_ok = False, True
+    if others:
+        my = rec.name.lower()
+        for ids in others:
+            if my in ids:
+                name_claimed = True          # 同名包共存，名字命中的目录不可归属
+            if any(i != my and (i.startswith(my + "-") or my.startswith(i + "-"))
+                   for i in ids):
+                prefix_ok = False            # 近名共存，前缀匹配会越界
+
     out = []
     for root in _residue_roots(rec, cfg):
         if not os.path.isdir(root):
@@ -132,8 +150,13 @@ def find_residues(rec, cfg=CFG):
         except OSError:
             continue
         for entry in entries:
-            if not _matches(entry, exact_ids, prefix_ids, cfg.residue_min_id_len):
+            if not _matches(entry, exact_ids,
+                            prefix_ids if prefix_ok else set(), cfg.residue_min_id_len):
                 continue
+            if others:
+                low = entry.lstrip(".").lower()
+                if any(low in ids for ids in others):
+                    continue                 # 目录被其他已安装包认领，跳过
             full = os.path.join(root, entry)
             if _is_protected(full, cfg):
                 continue
@@ -223,8 +246,10 @@ def _linyap_steps(rec, target):
     return [argv + [target]]
 
 
-def preview(rec, purge_residues=False, autoremove=True, cfg=CFG):
-    """dry-run + 残留扫描（无需 root）→ Plan。非 APP 类直接拒绝。"""
+def preview(rec, purge_residues=False, autoremove=True, cfg=CFG, inv=None):
+    """dry-run + 残留扫描（无需 root）→ Plan。非 APP 类直接拒绝。
+    inv 传入后启用近名共存保护（find_residues 的 others）——卸载一个包
+    时不再误删名字相近/相同的另一个包（不同来源）的用户数据。"""
     if not is_removable(rec):
         return Plan(ok=False, pkg_type=rec.pkg_type, name=rec.name,
                     error=block_reason(rec.pkg_class))
@@ -256,7 +281,18 @@ def preview(rec, purge_residues=False, autoremove=True, cfg=CFG):
         return Plan(ok=False, pkg_type=t, name=rec.name,
                     error=f"不支持卸载的包类型：{t}")
 
-    residues = find_residues(rec, cfg) if purge_residues else []
+    others = None
+    if inv is not None:
+        others = []
+        for r in inv.records:
+            if r.key == rec.key or r.is_loose_file:
+                continue
+            ids = {r.name.lower()}
+            did = r.extra.get("desktop_id", "")
+            if did:
+                ids.add(did.lower())
+            others.append(ids)
+    residues = find_residues(rec, cfg, others=others) if purge_residues else []
     user_paths = []
     for path, _size in residues:
         if is_under_home(path, cfg):

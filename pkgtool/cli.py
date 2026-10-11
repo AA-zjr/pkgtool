@@ -240,7 +240,7 @@ def cmd_remove(args):
     if rec is None:
         return 1
     plan = preview(rec, purge_residues=args.purge_residues,
-                   autoremove=not args.no_autoremove, cfg=CFG)
+                   autoremove=not args.no_autoremove, cfg=CFG, inv=inv)
     if not plan.ok:
         _err(f"拒绝卸载 {rec.name}：{plan.error}")
         return 2
