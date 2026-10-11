@@ -273,8 +273,15 @@ def cmd_remove(args):
 
 
 def cmd_clean(args):
-    targets = clean.collect_targets(CFG, kinds=args.kind or None,
-                                    min_size_mb=args.min_size)
+    if args.under:
+        # --under：下钻的命令行等价，只列该目录的下一层子项
+        targets = clean.child_targets(args.under, cfg=CFG)
+        if args.min_size > 0:
+            targets = [t for t in targets
+                       if t.size_known and t.size_mb >= args.min_size]
+    else:
+        targets = clean.collect_targets(CFG, kinds=args.kind or None,
+                                        min_size_mb=args.min_size)
     if not targets:
         print("没有可清理的目标")
         return 0
@@ -446,6 +453,9 @@ def build_parser():
                    help="只处理某类目标（可重复给多次；默认全部）")
     p.add_argument("--min-size", type=float, default=0.0, metavar="MB",
                    help="只处理不小于该体积（MB）的目标")
+    p.add_argument("--under", default="", metavar="PATH",
+                   help="只列出该缓存目录的下一层子项（TUI 下钻的命令行等价，"
+                        "可逐层深入定位大缓存来源）")
     p.add_argument("--list", action="store_true", help="只列出可清理项，不删除")
     p.add_argument("--trash", action="store_true",
                    help="移到回收站而不是真删（仅对普通权限的文件类目标有效）")
