@@ -10,6 +10,7 @@ import argparse
 import sys
 
 from . import catalog, clean, inventory, labels, launch, report, tui, upgrade
+from . import __version__
 from .apt import actions, lists
 from .config import CFG
 from .remove import execute, preview
@@ -354,6 +355,7 @@ def build_parser():
         description="本地软件包盘点与管理（deb 为主线，兼探 snap/flatpak/appimage）。"
                     "不带子命令直接运行会进入交互界面。",
         epilog="路径与阈值可用环境变量覆盖，见 `pkgtool config`。")
+    ap.add_argument("--version", action="version", version=f"pkgtool {__version__}")
     # required=False：裸跑 pkgtool 时 args.cmd 为 None，由 main() 转入交互界面
     sub = ap.add_subparsers(dest="cmd", required=False)
 
